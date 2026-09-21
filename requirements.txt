@@ -1,0 +1,6 @@
+streamlit>=1.32
+numpy
+scipy
+pandas
+plotly
+xlrd>=2.0.1
