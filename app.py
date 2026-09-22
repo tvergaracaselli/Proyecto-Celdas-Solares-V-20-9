@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
 import streamlit.components.v1 as components
-
+from plotly.subplots import make_subplots
 import constantes as c
 import fisica as f
 
@@ -41,7 +41,7 @@ DEFAULTS = dict(
     num_dedos=c.NUMERO_DEDOS_BASE, ancho_dedo_um=c.ANCHO_DEDO_BASE_UM,
     defecto_activo=False, defecto_filas=(2, 4), defecto_cols=(2, 4),
     defecto_tau_n_us=5.0, dedo_roto_col=None,
-    anim_modo="arcoiris",
+    anim_modo="unico",
 )
 for k, v in DEFAULTS.items():
     st.session_state.setdefault(k, v)
@@ -76,12 +76,6 @@ with st.sidebar:
                                 value=min([1e18,3e18,1e19,3e19,1e20], key=lambda z: abs(z-S["ND"])),
                                 format_func=lambda z: f"{z:.0e}")
 
-    st.markdown("### Óptica")
-    S["modo_R"] = st.radio("Reflectancia frontal R(λ)", ["fresnel", "fijo"],
-                            index=0 if S["modo_R"] == "fresnel" else 1, horizontal=True)
-    S["reflector_trasero"] = st.checkbox("Reflector trasero de aluminio activo", S["reflector_trasero"])
-    st.caption(f"Modelo del Al: una reflexión trasera, R_Al = {c.R_ALUMINIO_EFECTIVA:.2f}.")
-
     st.markdown("### Recombinación / colección")
     S["Sf"] = st.select_slider("S frontal [cm/s]", options=[10,1e2,1e3,1e4,1e5,1e6],
                                 value=min([10,1e2,1e3,1e4,1e5,1e6], key=lambda z: abs(z-S["Sf"])),
@@ -98,7 +92,7 @@ with st.sidebar:
                                 value=min([10,1e2,1e3,1e4,1e5,1e6], key=lambda z: abs(z-S["Rp"])),
                                 format_func=lambda z: f"{z:.0e}")
     S["n_ideal"] = st.slider("Factor de idealidad n", 1.0, 2.0, S["n_ideal"], 0.05)
-    S["irradiancia_soles"] = st.slider("Irradiancia [soles]", 0.1, 1.5, S["irradiancia_soles"], 0.05)
+    st.caption(f"Irradiancia: {S['irradiancia_soles']:.2f} soles · control en Pestaña 1")
     S["T_C"] = st.slider("Temperatura de operación [°C]", 15.0, 75.0, S["T_C"], 1.0)
 
     st.markdown("### Malla frontal de plata")
@@ -169,18 +163,31 @@ def truncar_cerca_voc(V_array, J_array, P_array=None, margen_frac=0.025):
 
 
 def wavelength_to_hex(wl):
-    """Aproximación visual del color asociado a una longitud de onda
-    (algoritmo clásico de Dan Bruton). Solo para representación gráfica:
-    por debajo de 380 nm y por sobre 750 nm no hay color perceptible
-    real, se extrapola para que la animación siga siendo legible."""
-    wl = float(np.clip(wl, 380, 750))
-    if wl < 440: R, G, B = -(wl - 440) / (440 - 380), 0.0, 1.0
-    elif wl < 490: R, G, B = 0.0, (wl - 440) / (490 - 440), 1.0
-    elif wl < 510: R, G, B = 0.0, 1.0, -(wl - 510) / (510 - 490)
-    elif wl < 580: R, G, B = (wl - 510) / (580 - 510), 1.0, 0.0
-    elif wl < 645: R, G, B = 1.0, -(wl - 645) / (645 - 580), 0.0
-    else: R, G, B = 1.0, 0.0, 0.0
-    return "#%02x%02x%02x" % (int(255*R), int(255*G), int(255*B))
+    """Color solo para visualizacion.
+
+    En el visible (380-750 nm) se usa una aproximacion RGB. UV e IR no tienen
+    un color visible real: se representan con falso color para distinguirlos
+    sin alterar en ningun caso la fisica de alpha(lambda).
+    """
+    wl = float(wl)
+    if wl < 380.0:
+        return "#8b5cf6"   # UV: falso color violeta
+    if wl > 750.0:
+        return "#fb7185"   # IR: falso color rosado/rojo suave
+
+    if wl < 440:
+        R, G, B = -(wl - 440) / (440 - 380), 0.0, 1.0
+    elif wl < 490:
+        R, G, B = 0.0, (wl - 440) / (490 - 440), 1.0
+    elif wl < 510:
+        R, G, B = 0.0, 1.0, -(wl - 510) / (510 - 490)
+    elif wl < 580:
+        R, G, B = (wl - 510) / (580 - 510), 1.0, 0.0
+    elif wl < 645:
+        R, G, B = 1.0, -(wl - 645) / (645 - 580), 0.0
+    else:
+        R, G, B = 1.0, 0.0, 0.0
+    return "#%02x%02x%02x" % (int(255 * R), int(255 * G), int(255 * B))
 
 
 def generacion_actual(x_um):
@@ -192,7 +199,97 @@ def generacion_actual(x_um):
     )
 
 # ============================================================
-# TABS
+# TEMA VISUAL — tipografía y estilos coherentes en toda la app
+# ============================================================
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ---- Encabezados ---- */
+h1 {
+    font-weight: 800 !important;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, #f6ad55 0%, #f687b3 60%, #63b3ed 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    padding-bottom: 2px;
+}
+h2, h3, h4, h5 { font-weight: 600 !important; letter-spacing: -0.01em; }
+h4, h5 { color: #cbd5e0 !important; }
+
+/* ---- Pestañas principales ---- */
+button[data-baseweb="tab"] {
+    font-size: 0.95rem;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: 10px 10px 0 0 !important;
+    color: #94a3b8;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: #f6ad55 !important;
+    background: rgba(246, 173, 85, 0.08);
+    border-bottom: 2.5px solid #f6ad55 !important;
+}
+div[data-baseweb="tab-highlight"] { background-color: #f6ad55 !important; }
+div[data-baseweb="tab-border"] { background-color: rgba(148,163,184,0.15) !important; }
+
+/* ---- Métricas como tarjetas ---- */
+div[data-testid="stMetric"] {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(148,163,184,0.14);
+    border-radius: 12px;
+    padding: 12px 14px 8px 14px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+}
+div[data-testid="stMetricValue"] {
+    font-size: 1.35rem;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+}
+div[data-testid="stMetricLabel"] { color: #94a3b8 !important; font-size: 0.82rem; }
+
+/* ---- Cajas informativas y expanders ---- */
+div[data-testid="stAlertContainer"] {
+    border-radius: 10px !important;
+    border-left: 3.5px solid #f6ad55 !important;
+}
+div[data-testid="stExpander"] {
+    border: 1px solid rgba(148,163,184,0.16) !important;
+    border-radius: 12px !important;
+    background: rgba(255,255,255,0.015);
+}
+
+/* ---- Sliders y controles ---- */
+div[data-baseweb="slider"] > div > div > div { background-color: #f6ad55 !important; }
+
+/* ---- Botones ---- */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 600;
+    border: 1px solid rgba(246,173,85,0.4);
+}
+.stButton > button:hover { border-color: #f6ad55; color: #f6ad55; }
+
+/* ---- Sidebar ---- */
+section[data-testid="stSidebar"] {
+    border-right: 1px solid rgba(148,163,184,0.12);
+}
+
+/* ---- Iframes de animaciones (canvas) sin borde duro ---- */
+iframe { border-radius: 10px; }
+
+/* ---- Separadores ---- */
+hr { border-color: rgba(148,163,184,0.15) !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# ENCABEZADO
 # ============================================================
 st.title("Laboratorio virtual · Celda p-n de silicio")
 st.caption("Explore los parámetros físicos de la celda y observe en tiempo real cómo cambian la absorción, la colección de portadores y la respuesta eléctrica.")
@@ -206,436 +303,741 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🎬 6. Resumen animado",
 ])
 
-st.markdown("""
-<style>
-div[data-testid="stMetricValue"] { font-size: 1.4rem; }
-</style>
-""", unsafe_allow_html=True)
-
 # ------------------------------------------------------------------
 # TAB 1 — ABSORCIÓN Y GENERACIÓN
 # ------------------------------------------------------------------
 with tab1:
-    st.subheader("Fotones cayendo sobre el silicio: dónde se absorbe cada color")
+    st.subheader("Absorción y generación")
 
-    colA, colB = st.columns([1, 1])
+    # Irradiancia compartida por toda la app. Aqui se controla porque es donde
+    # su efecto optico es mas intuitivo: mas soles = mas fotones por unidad de tiempo.
+    c_lambda, c_modo, c_irr = st.columns([2.2, 1.5, 1.5])
 
-    with colA:
-        S["lambda_perfil"] = st.slider(
-            "λ para el perfil G(x) [nm]",
+    with c_lambda:
+        st.slider(
+            "Longitud de onda λ [nm]",
             300.0,
             1200.0,
-            S["lambda_perfil"],
-            5.0,
-            key="l1",
+            step=5.0,
+            key="lambda_perfil",
         )
 
-    with colB:
-        S["anim_modo"] = st.radio(
-            "Animación",
-            ["arcoiris (varios λ)", "un solo λ (el del slider)"],
-            index=0 if S["anim_modo"] == "arcoiris" else 1,
+    with c_modo:
+        st.radio(
+            "Iluminación",
+            options=["unico", "arcoiris"],
+            format_func=lambda x: "λ seleccionada" if x == "unico" else "Espectro solar AM1.5G",
             horizontal=True,
-        )
-        S["anim_modo"] = (
-            "arcoiris"
-            if S["anim_modo"].startswith("arcoiris")
-            else "unico"
+            key="anim_modo",
         )
 
+    with c_irr:
+        st.slider(
+            "Irradiancia [soles]",
+            0.10,
+            1.50,
+            step=0.05,
+            key="irradiancia_soles",
+        )
+
+    # Óptica junto a la simulación: estos controles afectan directamente
+    # reflexión, absorción y el balance de fotones de esta pestaña.
+    c_ref, c_al = st.columns([1.6, 1.4])
+    with c_ref:
+        st.radio(
+            "Reflectancia frontal R(λ)",
+            options=["fresnel", "fijo"],
+            format_func=lambda x: "Fresnel" if x == "fresnel" else "R fija",
+            horizontal=True,
+            key="modo_R",
+        )
+    with c_al:
+        st.checkbox(
+            "Reflector trasero de Al",
+            key="reflector_trasero",
+        )
+
+    irr_soles = float(S["irradiancia_soles"])
+
+    def generacion_actual_vista(x_um):
+        return irr_soles * generacion_actual(x_um)
+
     # ============================================================
-    # ANIMACIÓN DE FOTONES
+    # ANIMACION 2D — FOTONES + ABSORCION
     # ============================================================
-    wl_anim = np.linspace(300.0, 1200.0, 46)
-    alpha_um_lookup = (
-        f.alpha_silicio(wl_anim) * 1e-4
-    ).tolist()
+    wl_anim = np.linspace(300.0, 1200.0, 91)
+    alpha_um_lookup = (f.alpha_silicio(wl_anim) * 1e-4).tolist()
     wl_lookup = wl_anim.tolist()
-    R_lookup = f.reflectancia_frontal(
-        wl_anim,
-        modo=S["modo_R"],
-    ).tolist()
-    colores_lookup = [
-        wavelength_to_hex(wl)
-        for wl in wl_lookup
-    ]
+    R_lookup = f.reflectancia_frontal(wl_anim, modo=S["modo_R"]).tolist()
 
-    _, phi0_lookup_raw = (
-        f.espectro_y_flujo_fotones(wl_anim)
-    )
-    phi0_lookup = phi0_lookup_raw.tolist()
+    _, phi0_lookup_raw = f.espectro_y_flujo_fotones(wl_anim)
+    phi0_lookup = np.clip(phi0_lookup_raw, 0.0, None).tolist()
 
-    single_wl = S["lambda_perfil"]
+    single_wl = float(S["lambda_perfil"])
     single_color = wavelength_to_hex(single_wl)
-    single_alpha_um = float(
-        f.alpha_silicio(np.array([single_wl]))[0]
-        * 1e-4
+    single_alpha_um = float(f.alpha_silicio(np.array([single_wl]))[0] * 1e-4)
+    single_depth_um = 1.0 / max(single_alpha_um, 1e-12)
+    single_x90_um = np.log(10.0) / max(single_alpha_um, 1e-12)
+
+    # ------------------------------------------------------------
+    # BALANCE ÓPTICO FÍSICO
+    # ------------------------------------------------------------
+    # Todos los valores mostrados al usuario se calculan a partir del flujo
+    # espectral AM1.5G, R(lambda), alpha(lambda), espesor de la celda y el
+    # reflector trasero. La animación es sólo una muestra Monte Carlo de esas
+    # probabilidades; los números mostrados NO son conteos de sprites.
+    frac_r_phys, frac_a_phys, frac_back_phys, frac_escape_phys = (
+        f.balance_fotones_con_reflector(
+            R_grid,
+            alpha_grid,
+            W_total_um,
+            reflector_trasero_activo=S["reflector_trasero"],
+            R_aluminio=c.R_ALUMINIO_EFECTIVA,
+        )
     )
+
+    # Fracción que alcanza el dorso y efectivamente rebota en el Al. Es un
+    # evento intermedio: luego ese mismo fotón puede absorberse o escapar.
+    trans_una_pasada_phys = np.exp(-alpha_grid * W_total_um * 1e-4)
+    frac_al_ref_phys = (
+        (1.0 - R_grid)
+        * trans_una_pasada_phys
+        * c.R_ALUMINIO_EFECTIVA
+        if S["reflector_trasero"]
+        else np.zeros_like(wl_grid)
+    )
+
+    if S["anim_modo"] == "unico":
+        # En modo lambda única se muestran DENSIDADES ESPECTRALES de flujo,
+        # por unidad de longitud de onda, evaluadas exactamente en lambda.
+        phi_inc_phys = irr_soles * float(np.interp(single_wl, wl_grid, phi0_grid))
+        f_r = float(np.interp(single_wl, wl_grid, frac_r_phys))
+        f_a = float(np.interp(single_wl, wl_grid, frac_a_phys))
+        f_b = float(np.interp(single_wl, wl_grid, frac_back_phys))
+        f_e = float(np.interp(single_wl, wl_grid, frac_escape_phys))
+        f_al = float(np.interp(single_wl, wl_grid, frac_al_ref_phys))
+
+        flujo_inc_phys = phi_inc_phys
+        flujo_r_phys = phi_inc_phys * f_r
+        flujo_a_phys = phi_inc_phys * f_a
+        flujo_back_phys = phi_inc_phys * f_b
+        flujo_escape_phys = phi_inc_phys * f_e
+        flujo_al_phys = phi_inc_phys * f_al
+        flujo_unidad = "fot·cm⁻²·s⁻¹·nm⁻¹"
+    else:
+        # En AM1.5G se integra el espectro completo de 300 a 1200 nm.
+        phi_espectral_phys = irr_soles * phi0_grid
+        flujo_inc_phys = float(np.trapezoid(phi_espectral_phys, wl_grid))
+        flujo_r_phys = float(np.trapezoid(phi_espectral_phys * frac_r_phys, wl_grid))
+        flujo_a_phys = float(np.trapezoid(phi_espectral_phys * frac_a_phys, wl_grid))
+        flujo_back_phys = float(np.trapezoid(phi_espectral_phys * frac_back_phys, wl_grid))
+        flujo_escape_phys = float(np.trapezoid(phi_espectral_phys * frac_escape_phys, wl_grid))
+        flujo_al_phys = float(np.trapezoid(phi_espectral_phys * frac_al_ref_phys, wl_grid))
+        flujo_unidad = "fot·cm⁻²·s⁻¹"
+
+    # ------------------------------------------------------------
+    # GENERACIÓN FÍSICA DE PARES ELECTRÓN-HUECO
+    # ------------------------------------------------------------
+    # Un fotón sólo puede crear un par e−/h+ por excitación banda-a-banda si
+    # E_fotón >= Eg. Para Si a 300 K, λ_g = hc/(q Eg) ≈ 1107 nm.
+    lambda_gap_nm = (
+        c.H_PLANCK * c.C_LUZ / (c.Q * c.EG_SI_300K) * 1e9
+    )
+
+    if S["anim_modo"] == "unico":
+        puede_generar_par = single_wl <= lambda_gap_nm
+        flujo_pares_phys = flujo_a_phys if puede_generar_par else 0.0
+        flujo_pares_unidad = "pares·cm⁻²·s⁻¹·nm⁻¹"
+        pares_acum_unidad = "pares·cm⁻²·nm⁻¹"
+    else:
+        energia_foton_eV = (
+            c.H_PLANCK * c.C_LUZ
+            / (wl_grid * 1e-9)
+            / c.Q
+        )
+        mascara_sobre_gap = energia_foton_eV >= c.EG_SI_300K
+        flujo_pares_phys = float(np.trapezoid(
+            phi_espectral_phys
+            * frac_a_phys
+            * mascara_sobre_gap.astype(float),
+            wl_grid,
+        ))
+        flujo_pares_unidad = "pares·cm⁻²·s⁻¹"
+        pares_acum_unidad = "pares·cm⁻²"
+
+    def _fmt_flujo(v):
+        return f"{v:.2e}"
+
+    def _pct_flujo(v):
+        return 100.0 * v / flujo_inc_phys if flujo_inc_phys > 0 else 0.0
+
+    # Densidad de sprites: sólo resolución gráfica. Su valor relativo sí sigue
+    # el flujo físico incidente; cada sprite representa una enorme cantidad de
+    # fotones reales y nunca se presenta como una magnitud física.
+    if S["anim_modo"] == "unico":
+        phi_ref_visual = max(
+            1e-30,
+            1.5 * float(np.max(phi0_grid)),
+        )
+        intensidad_visual_rel = np.clip(flujo_inc_phys / phi_ref_visual, 0.03, 1.0)
+    else:
+        flujo_ref_visual = max(
+            1e-30,
+            1.5 * float(np.trapezoid(phi0_grid, wl_grid)),
+        )
+        intensidad_visual_rel = np.clip(flujo_inc_phys / flujo_ref_visual, 0.03, 1.0)
 
     html_photons = f"""
-<div style="background:#0b0e14;border-radius:10px;padding:10px">
-<canvas id="cv" width="900" height="360"
-style="width:100%;display:block;border-radius:8px;"></canvas>
+<div style="background:linear-gradient(180deg,#07101c 0%,#091321 100%);border:1px solid rgba(148,163,184,.10);border-radius:16px;padding:8px;overflow:hidden">
+<canvas id="cv" width="1000" height="420" style="width:100%;display:block;border-radius:12px;"></canvas>
+<div id="live-photon-counts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:7px;padding:8px 4px 3px 4px;font-family:Inter,system-ui,sans-serif;">
+  <div class="livecount"><span>INCIDENTES</span><strong id="live-inc">0</strong></div>
+  <div class="livecount"><span>ABSORBIDOS</span><strong id="live-abs">0</strong></div>
+  <div class="livecount"><span>PARES e⁻/h⁺</span><strong id="live-pairs">0</strong></div>
+  <div class="livecount"><span>REF. FRONTAL</span><strong id="live-front">0</strong></div>
+  <div class="livecount"><span>NO ABSORBIDOS</span><strong id="live-nonabs">0</strong></div>
+  <div class="livecount"><span>PÉRDIDA TRASERA</span><strong id="live-back">0</strong></div>
+  <div class="livecount"><span>ESCAPE FRONTAL</span><strong id="live-escape">0</strong></div>
+  <div class="livecount" id="live-al-box" style="display:{'block' if S['reflector_trasero'] else 'none'}"><span>REF. EN Al</span><strong id="live-al">0</strong></div>
+</div>
+<div id="photon-stats" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;padding:5px 4px 2px 4px;font-family:Inter,system-ui,sans-serif;">
+  <div class="pstat"><span>INCIDENTE</span><strong>{_fmt_flujo(flujo_inc_phys)}</strong><small>{flujo_unidad}</small></div>
+  <div class="pstat"><span>ABSORBIDO</span><strong>{_fmt_flujo(flujo_a_phys)}</strong><small>{_pct_flujo(flujo_a_phys):.1f}%</small></div>
+  <div class="pstat"><span>PARES e⁻/h⁺</span><strong>{_fmt_flujo(flujo_pares_phys)}</strong><small>{flujo_pares_unidad}</small></div>
+  <div class="pstat"><span>REF. FRONTAL</span><strong>{_fmt_flujo(flujo_r_phys)}</strong><small>{_pct_flujo(flujo_r_phys):.1f}%</small></div>
+  <div class="pstat"><span>PÉRDIDA TRASERA</span><strong>{_fmt_flujo(flujo_back_phys)}</strong><small>{_pct_flujo(flujo_back_phys):.1f}%</small></div>
+  <div class="pstat"><span>ESCAPE FRONTAL</span><strong>{_fmt_flujo(flujo_escape_phys)}</strong><small>{_pct_flujo(flujo_escape_phys):.1f}%</small></div>
+  <div class="pstat" style="opacity:{'1' if S['reflector_trasero'] else '.35'}"><span>REF. EN Al</span><strong>{_fmt_flujo(flujo_al_phys)}</strong><small>{_pct_flujo(flujo_al_phys):.1f}% · intermedio</small></div>
+</div>
+<style>
+  #live-photon-counts .livecount{{background:rgba(255,255,255,.022);border:1px solid rgba(148,163,184,.10);border-radius:9px;padding:7px 9px;min-height:43px;box-sizing:border-box;}}
+  #live-photon-counts span{{display:block;color:rgba(148,163,184,.78);font-size:8.5px;font-weight:700;letter-spacing:.05em;white-space:nowrap;}}
+  #live-photon-counts strong{{display:block;color:rgba(241,245,249,.98);font-size:17px;line-height:1.1;margin-top:4px;font-variant-numeric:tabular-nums;}}
+  #photon-stats .pstat{{background:rgba(255,255,255,.035);border:1px solid rgba(148,163,184,.12);border-radius:10px;padding:9px 10px;min-height:56px;box-sizing:border-box;}}
+  #photon-stats span{{display:block;color:rgba(148,163,184,.86);font-size:9px;font-weight:700;letter-spacing:.055em;white-space:nowrap;}}
+  #photon-stats strong{{display:block;color:rgba(241,245,249,.98);font-size:17px;line-height:1.15;margin-top:4px;}}
+  #photon-stats small{{display:block;color:rgba(203,213,225,.72);font-size:9px;margin-top:2px;white-space:nowrap;}}
+  @media (max-width:950px){{
+    #live-photon-counts{{grid-template-columns:repeat(3,minmax(0,1fr)) !important;}}
+    #photon-stats{{grid-template-columns:repeat(3,minmax(0,1fr)) !important;}}
+  }}
+</style>
 </div>
 <script>
 const wlLookup = {json.dumps(wl_lookup)};
 const phi0Lookup = {json.dumps(phi0_lookup)};
 const alphaLookup = {json.dumps(alpha_um_lookup)};
+const rLookup = {json.dumps(R_lookup)};
 const modo = "{S['anim_modo']}";
-const irradianciaSoles = {S['irradiancia_soles']};
+const irradianciaSoles = {irr_soles};
+const singleWl = {single_wl};
 const singleColor = "{single_color}";
-const W_total_um = {W_total_um};
-const dn_um = {S['dn_um']};
+const Wtotal = {W_total_um};
+const xnUm = {xn_um};
+const xpUm = {xp_um};
 const reflectorActivo = {str(bool(S['reflector_trasero'])).lower()};
 const RAl = {c.R_ALUMINIO_EFECTIVA};
-
-function interp(x, xs, ys){{
-  if (x <= xs[0]) return ys[0];
-  if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
-  for (let i = 0; i < xs.length - 1; i++){{
-    if (x >= xs[i] && x <= xs[i + 1]){{
-      const t = (x - xs[i]) / (xs[i + 1] - xs[i]);
-      return ys[i] + t * (ys[i + 1] - ys[i]);
-    }}
-  }}
-  return ys[ys.length - 1];
-}}
+const lambdaGapNm = {lambda_gap_nm};
+const pairFluxPhysical = {flujo_pares_phys};
+const incidentFluxPhysical = {flujo_inc_phys};
+const pairAccumUnit = "{pares_acum_unidad}";
 
 const cv = document.getElementById("cv");
 const ctx = cv.getContext("2d");
-const W = cv.width;
-const H = cv.height;
-const blockTop = 46;
-const blockBottom = H - 46;
+const W = cv.width, H = cv.height;
+const left = 54, right = W - 54;
+const blockTop = 86, blockBottom = H - 75;
 const blockH = blockBottom - blockTop;
-const xnUmT1 = {xn_um};
-const xpUmT1 = {xp_um};
 
 const fracEmisor = 0.24;
 const fracDeplecion = 0.10;
-const depthBreaks = [0, xnUmT1, xpUmT1, W_total_um];
+const depthBreaks = [0, xnUm, xpUm, Wtotal];
 const fracBreaks = [0, fracEmisor, fracEmisor + fracDeplecion, 1.0];
 
-function fracOfDepth(x_um){{
-  if (x_um <= depthBreaks[0]) return 0;
-  if (x_um >= depthBreaks[3]) return 1;
-  for (let i = 0; i < 3; i++){{
-    if (x_um >= depthBreaks[i] && x_um <= depthBreaks[i + 1]){{
-      const t = (x_um - depthBreaks[i]) /
-        Math.max(depthBreaks[i + 1] - depthBreaks[i], 1e-9);
-      return fracBreaks[i] +
-        t * (fracBreaks[i + 1] - fracBreaks[i]);
+function interp(x, xs, ys){{
+  if(x <= xs[0]) return ys[0];
+  if(x >= xs[xs.length-1]) return ys[ys.length-1];
+  for(let i=0; i<xs.length-1; i++){{
+    if(x >= xs[i] && x <= xs[i+1]){{
+      const t = (x-xs[i]) / Math.max(xs[i+1]-xs[i], 1e-12);
+      return ys[i] + t*(ys[i+1]-ys[i]);
+    }}
+  }}
+  return ys[ys.length-1];
+}}
+
+function fracOfDepth(xum){{
+  if(xum <= 0) return 0;
+  if(xum >= Wtotal) return 1;
+  for(let i=0; i<3; i++){{
+    if(xum >= depthBreaks[i] && xum <= depthBreaks[i+1]){{
+      const t = (xum-depthBreaks[i]) / Math.max(depthBreaks[i+1]-depthBreaks[i], 1e-12);
+      return fracBreaks[i] + t*(fracBreaks[i+1]-fracBreaks[i]);
     }}
   }}
   return 1;
 }}
 
-function yOfFrac(fr){{
-  return blockTop + fr * blockH;
-}}
-
-let photons = [];
-let cdfEspectro = [];
-let acumuladoEspectro = 0;
-
-for (let i = 0; i < phi0Lookup.length; i++){{
-  acumuladoEspectro += Math.max(phi0Lookup[i], 0);
-  cdfEspectro.push(acumuladoEspectro);
-}}
-
-for (let i = 0; i < cdfEspectro.length; i++){{
-  cdfEspectro[i] = cdfEspectro[i] /
-    Math.max(acumuladoEspectro, 1e-30);
-}}
-
-function sampleWavelengthReal(){{
-  const r = Math.random();
-  for (let i = 0; i < cdfEspectro.length - 1; i++){{
-    if (r <= cdfEspectro[i + 1]){{
-      const rango = Math.max(
-        cdfEspectro[i + 1] - cdfEspectro[i],
-        1e-9,
-      );
-      const t = (r - cdfEspectro[i]) / rango;
-      return wlLookup[i] +
-        t * (wlLookup[i + 1] - wlLookup[i]);
-    }}
-  }}
-  return wlLookup[wlLookup.length - 1];
-}}
+function yOfFrac(fr){{ return blockTop + fr*blockH; }}
 
 function colorFromWl(wl){{
-  wl = Math.max(380, Math.min(750, wl));
-  let R, G, B;
-  if (wl < 440){{
-    R = -(wl - 440) / (440 - 380);
-    G = 0;
-    B = 1;
-  }} else if (wl < 490){{
-    R = 0;
-    G = (wl - 440) / (490 - 440);
-    B = 1;
-  }} else if (wl < 510){{
-    R = 0;
-    G = 1;
-    B = -(wl - 510) / (510 - 490);
-  }} else if (wl < 580){{
-    R = (wl - 510) / (580 - 510);
-    G = 1;
-    B = 0;
-  }} else if (wl < 645){{
-    R = 1;
-    G = -(wl - 645) / (645 - 580);
-    B = 0;
-  }} else{{
-    R = 1;
-    G = 0;
-    B = 0;
-  }}
-  return `rgb(${{Math.round(255 * R)}},${{Math.round(255 * G)}},${{Math.round(255 * B)}})`;
+  if(wl < 380) return "#8b5cf6";   // UV: falso color
+  if(wl > 750) return "#fb7185";   // IR: falso color
+  let R,G,B;
+  if(wl < 440){{ R=-(wl-440)/(440-380); G=0; B=1; }}
+  else if(wl < 490){{ R=0; G=(wl-440)/(490-440); B=1; }}
+  else if(wl < 510){{ R=0; G=1; B=-(wl-510)/(510-490); }}
+  else if(wl < 580){{ R=(wl-510)/(580-510); G=1; B=0; }}
+  else if(wl < 645){{ R=1; G=-(wl-645)/(645-580); B=0; }}
+  else {{ R=1; G=0; B=0; }}
+  return `rgb(${{Math.round(255*R)}},${{Math.round(255*G)}},${{Math.round(255*B)}})`;
 }}
 
-function spawnPhoton(){{
-  const wl = modo === "arcoiris"
-    ? sampleWavelengthReal()
-    : {single_wl};
-  const alpha_um = interp(wl, wlLookup, alphaLookup);
-  const color = modo === "arcoiris"
-    ? colorFromWl(wl)
-    : singleColor;
-  const xAbs = -Math.log(Math.random()) /
-    Math.max(alpha_um, 1e-6);
-  const transmitido = xAbs > W_total_um;
-
-  photons.push({{
-    x: 60 + Math.random() * (W - 120),
-    fracPos: -0.06,
-    color: color,
-    vfrac: 0.010 + Math.random() * 0.004,
-    fracAbs: transmitido ? 1.0 : fracOfDepth(xAbs),
-    transmitido: transmitido,
-    alpha_um: alpha_um,
-    state: "falling",
-    reflected: false,
-  }});
+// Distribucion acumulada del flujo de fotones AM1.5G.
+const weights = phi0Lookup.map(v => Math.max(v,0));
+const totalWeight = Math.max(weights.reduce((a,b)=>a+b,0), 1e-30);
+let cdf = [];
+let acc = 0;
+for(let i=0; i<weights.length; i++){{
+  acc += weights[i]/totalWeight;
+  cdf.push(acc);
 }}
 
-let sparks = [];
-let nAbs = 0;
-let nTrans = 0;
-let nRef = 0;
-let nEscape = 0;
+function sampleSpectrum(){{
+  const r = Math.random();
+  let i = cdf.findIndex(v => r <= v);
+  if(i < 0) i = cdf.length-1;
+  if(i === 0) return wlLookup[0];
+  const c0 = cdf[i-1], c1 = cdf[i];
+  const t = (r-c0) / Math.max(c1-c0, 1e-12);
+  return wlLookup[i-1] + t*(wlLookup[i]-wlLookup[i-1]);
+}}
 
-function step(){{
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = "#20242c";
-  ctx.fillRect(30, blockTop, W - 60, blockH);
+function roundedRect(x,y,w,h,r){{
+  const rr = Math.min(r,w/2,h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+rr,y);
+  ctx.arcTo(x+w,y,x+w,y+h,rr);
+  ctx.arcTo(x+w,y+h,x,y+h,rr);
+  ctx.arcTo(x,y+h,x,y,rr);
+  ctx.arcTo(x,y,x+w,y,rr);
+  ctx.closePath();
+}}
+
+function drawScene(now){{
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,"#07101c");
+  bg.addColorStop(1,"#0a1523");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0,0,W,H);
+
+  // Halo de iluminacion superior: decorativo, sin texto extra.
+  const glow = ctx.createRadialGradient(W/2,36,4,W/2,36,W*0.42);
+  glow.addColorStop(0, modo === "unico" ? singleColor + "55" : "rgba(255,255,255,.16)");
+  glow.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0,0,W,80);
 
   const yE0 = yOfFrac(0);
   const yE1 = yOfFrac(fracEmisor);
   const yD1 = yOfFrac(fracEmisor + fracDeplecion);
   const yB1 = yOfFrac(1);
 
-  ctx.fillStyle = "rgba(99,179,237,0.16)";
-  ctx.fillRect(30, yE0, W - 60, yE1 - yE0);
-  ctx.fillStyle = "rgba(246,173,85,0.30)";
-  ctx.fillRect(30, yE1, W - 60, yD1 - yE1);
-  ctx.fillStyle = "rgba(104,211,145,0.14)";
-  ctx.fillRect(30, yD1, W - 60, yB1 - yD1);
+  roundedRect(left, blockTop, right-left, blockH, 13);
+  ctx.fillStyle = "rgba(255,255,255,.025)";
+  ctx.fill();
 
-  ctx.strokeStyle = "#4a5568";
-  ctx.strokeRect(30, blockTop, W - 60, blockH);
-  ctx.strokeStyle = "#f6ad55";
-  ctx.setLineDash([6, 4]);
-  ctx.beginPath();
-  ctx.moveTo(30, yE1);
-  ctx.lineTo(W - 30, yE1);
+  ctx.fillStyle = "rgba(74,116,154,.22)";
+  ctx.fillRect(left,yE0,right-left,yE1-yE0);
+  ctx.fillStyle = "rgba(210,158,74,.18)";
+  ctx.fillRect(left,yE1,right-left,yD1-yE1);
+  ctx.fillStyle = "rgba(62,112,88,.20)";
+  ctx.fillRect(left,yD1,right-left,yB1-yD1);
+
+  ctx.strokeStyle = "rgba(255,255,255,.12)";
+  ctx.lineWidth = 1;
+  roundedRect(left, blockTop, right-left, blockH, 13);
   ctx.stroke();
+
+  ctx.strokeStyle = "rgba(255,255,255,.10)";
+  ctx.beginPath(); ctx.moveTo(left,yE1); ctx.lineTo(right,yE1); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(left,yD1); ctx.lineTo(right,yD1); ctx.stroke();
+
+  if(reflectorActivo){{
+    const al = ctx.createLinearGradient(left,0,right,0);
+    al.addColorStop(0,"rgba(245,193,86,.18)");
+    al.addColorStop(.5,"rgba(255,224,143,.72)");
+    al.addColorStop(1,"rgba(245,193,86,.18)");
+    ctx.fillStyle = al;
+    ctx.fillRect(left+10,blockBottom+6,right-left-20,3);
+  }}
+
+  ctx.font = "600 12px Inter, system-ui, sans-serif";
+  ctx.letterSpacing = "0.08em";
+  ctx.fillStyle = "rgba(191,219,254,.72)";
+  ctx.fillText("EMISOR n", left+16, (yE0+yE1)/2+4);
+  ctx.fillStyle = "rgba(253,230,138,.72)";
+  ctx.fillText("DEPLECIÓN", left+16, (yE1+yD1)/2+4);
+  ctx.fillStyle = "rgba(187,247,208,.68)";
+  ctx.fillText("BASE p", left+16, yD1+22);
+}}
+
+let photons = [];
+let bursts = [];
+let nextSpawn = 0;
+let lastTime = performance.now();
+
+// Contadores de la muestra visual. La tasa de fotones incidentes escala
+// linealmente con la irradiancia; las fracciones opticas dependen de lambda,
+// R(lambda), alpha(lambda), espesor y reflector trasero.
+let nIncident = 0;
+let nAbs = 0;
+let nFrontRef = 0;
+let nBackLoss = 0;
+let nEscape = 0;
+let nAlRef = 0;
+let nPairs = 0;
+
+// La velocidad visual NO depende de la irradiancia. Solo la tasa de llegada.
+// Los enteros mostrados son eventos de la muestra Monte Carlo; todas las
+// probabilidades de destino provienen de R(λ), α(λ), Beer–Lambert y R_Al.
+const spawnRate = 14.0 * {float(intensidad_visual_rel)};
+
+// Contadores visibles bajo la animación. Los porcentajes usan sólo fotones
+// que ya terminaron su trayectoria, para no sesgar el balance con fotones
+// que todavía están viajando dentro del canvas.
+function updateStatsDom(){{
+  // Conteo acumulado EN TIEMPO REAL de los fotones representativos que
+  // realmente atraviesan la simulación Monte Carlo. Cada destino se decide
+  // con R(lambda), alpha(lambda), Beer-Lambert, espesor y reflector de Al.
+  // La tasa de llegada de estos fotones representativos escala con el flujo
+  // físico incidente; los flujos absolutos físicos siguen mostrándose abajo.
+  const nNoAbs = nFrontRef + nBackLoss + nEscape;
+  document.getElementById("live-inc").textContent = nIncident.toLocaleString("es-CL");
+  document.getElementById("live-abs").textContent = nAbs.toLocaleString("es-CL");
+  document.getElementById("live-pairs").textContent = nPairs.toLocaleString("es-CL");
+  document.getElementById("live-front").textContent = nFrontRef.toLocaleString("es-CL");
+  document.getElementById("live-nonabs").textContent = nNoAbs.toLocaleString("es-CL");
+  document.getElementById("live-back").textContent = nBackLoss.toLocaleString("es-CL");
+  document.getElementById("live-escape").textContent = nEscape.toLocaleString("es-CL");
+  if(reflectorActivo){{
+    const al = document.getElementById("live-al");
+    if(al) al.textContent = nAlRef.toLocaleString("es-CL");
+  }}
+}}
+
+function scheduleNextSpawn(){{
+  nextSpawn = -Math.log(Math.max(Math.random(),1e-9)) / spawnRate;
+}}
+scheduleNextSpawn();
+
+function spawnPhoton(){{
+  if(photons.length > 120) return;
+  const wl = modo === "arcoiris" ? sampleSpectrum() : singleWl;
+  const alpha = interp(wl, wlLookup, alphaLookup);
+  const Rfront = interp(wl, wlLookup, rLookup);
+  const xAbs = -Math.log(Math.max(Math.random(),1e-9)) / Math.max(alpha,1e-8);
+  const transmitted = xAbs > Wtotal;
+
+  photons.push({{
+    x: left + 26 + Math.random()*(right-left-52),
+    frac: -0.11 - Math.random()*0.035,
+    // La apariencia NO codifica intensidad ni energía. Para una misma λ,
+    // todos los fotones se dibujan con el mismo tamaño, brillo y estela.
+    // La única variable visual espectral es el color asociado a λ.
+    speed: 0.32,
+    radius: 2.6,
+    trail: 24,
+    color: modo === "arcoiris" ? colorFromWl(wl) : singleColor,
+    wl: wl,
+    alpha: alpha,
+    Rfront: Rfront,
+    frontDecision: false,
+    transmitted: transmitted,
+    fracAbs: transmitted ? 1.0 : fracOfDepth(xAbs),
+    state: "incoming",
+  }});
+}}
+
+function drawPhoton(p, now, returning=false){{
+  const yy = yOfFrac(p.frac);
+  const xx = p.x;
+  const dir = returning ? -1 : 1;
+  const tailY = yy - dir*p.trail;
+
+  // Estela suave sólo para comunicar movimiento. Su intensidad es fija:
+  // no representa energía, irradiancia ni probabilidad de absorción.
+  const trail = ctx.createLinearGradient(xx,tailY,xx,yy);
+  trail.addColorStop(0,"rgba(255,255,255,0)");
+  trail.addColorStop(1,p.color);
+  ctx.globalAlpha = 0.48;
+  ctx.strokeStyle = trail;
+  ctx.lineWidth = 2.0;
   ctx.beginPath();
-  ctx.moveTo(30, yD1);
-  ctx.lineTo(W - 30, yD1);
+  ctx.moveTo(xx,tailY);
+  ctx.lineTo(xx,yy);
   ctx.stroke();
-  ctx.setLineDash([]);
 
-  ctx.font = "bold 13px sans-serif";
-  ctx.fillStyle = "#90cdf4";
-  ctx.fillText(
-    "EMISOR n  (dn=" + dn_um.toFixed(1) + " µm)",
-    36,
-    (yE0 + yE1) / 2 + 5,
-  );
-  ctx.fillStyle = "#f6ad55";
-  ctx.fillText("DEPLECCIÓN", 36, (yE1 + yD1) / 2 + 5);
-  ctx.fillStyle = "#9ae6b4";
-  ctx.fillText(
-    "BASE p  (Wp=" + (W_total_um - dn_um).toFixed(0) + " µm)",
-    36,
-    yD1 + 22,
-  );
-  ctx.font = "11px sans-serif";
-  ctx.fillStyle = "#718096";
-  ctx.fillText(
-    "(escala vertical comprimida; no es a escala real)",
-    36,
-    blockTop - 10,
-  );
-  ctx.fillStyle = "#a0aec0";
-  ctx.fillText("superficie x=0", 36, blockTop + 12);
-  ctx.fillText(
-    "contacto trasero x=W=" + W_total_um.toFixed(0) + " µm",
-    36,
-    blockBottom + 16,
-  );
+  // Halo y núcleo con tamaño/brillo constantes para todos los fotones.
+  const halo = ctx.createRadialGradient(xx,yy,0,xx,yy,8);
+  halo.addColorStop(0,"rgba(255,255,255,.95)");
+  halo.addColorStop(.24,p.color);
+  halo.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.globalAlpha = 0.62;
+  ctx.fillStyle = halo;
+  ctx.beginPath(); ctx.arc(xx,yy,8,0,Math.PI*2); ctx.fill();
 
-  if (Math.random() < 0.10 * irradianciaSoles) spawnPhoton();
+  ctx.globalAlpha = 0.92;
+  ctx.fillStyle = p.color;
+  ctx.beginPath(); ctx.arc(xx,yy,p.radius,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+}}
+
+function absorb(p, yy, fracAbsorcion){{
+  p.state = "absorbed";
+  nAbs++;
+
+  // Para generar un par banda-a-banda en Si se requiere E_fotón >= Eg.
+  // Por tanto, sólo λ <= λ_g produce el electrón y el hueco animados.
+  const generaPar = p.wl <= lambdaGapNm;
+
+  let region = "depletion";
+  if(fracAbsorcion < fracEmisor) region = "emitter";
+  else if(fracAbsorcion > fracEmisor + fracDeplecion) region = "base";
+
+  if(generaPar){{
+    nPairs++;
+  }}
+
+  bursts.push({{
+    x:p.x, y:yy, age:0, life:0.82,
+    color:p.color,
+    phase:Math.random()*Math.PI*2,
+    region:region,
+    generaPar:generaPar,
+  }});
+}}
+
+function drawCarrier(x, y, radius, color, alpha){{
+  if(alpha <= 0) return;
+  const halo = ctx.createRadialGradient(x,y,0,x,y,6);
+  halo.addColorStop(0,color);
+  halo.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.globalAlpha = 0.20*alpha;
+  ctx.fillStyle = halo;
+  ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fill();
+
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+}}
+
+function updateBurst(b, dt){{
+  b.age += dt;
+  const t = Math.min(b.age/b.life,1);
+  const fade = Math.pow(1-t,1.55);
+
+  // Destello breve en el lugar donde el fotón fue absorbido.
+  const flashT = Math.min(t/0.42,1);
+  const r = 3 + 13*flashT;
+  const flashFade = Math.max(0,1-flashT);
+  const g = ctx.createRadialGradient(b.x,b.y,0,b.x,b.y,r);
+  g.addColorStop(0,`rgba(255,255,255,${{0.90*flashFade}})`);
+  g.addColorStop(.24,`rgba(255,236,180,${{0.50*flashFade}})`);
+  g.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(b.x,b.y,r,0,Math.PI*2); ctx.fill();
+
+  // Si E_fotón < Eg puede existir una absorción óptica débil, pero no se
+  // representa creación de un par banda-a-banda.
+  if(!b.generaPar) return;
+
+  // Azul = hueco (h+), rojo = electrón (e−), coherente con la pestaña 2.
+  // En regiones neutras se destaca el PORTADOR MINORITARIO que difunde hacia
+  // la zona de depleción. El mayoritario aparece sólo de forma breve/local.
+  const move = 1-Math.pow(1-t,2.2);
+  const wobble = Math.sin(b.phase + t*5.0);
+  let hx=b.x, hy=b.y, ex=b.x, ey=b.y;
+  let hAlpha=0, eAlpha=0;
+
+  if(b.region === "emitter"){{
+    // Emisor n: el hueco es minoritario y difunde hacia la depleción (abajo).
+    hx = b.x - 2.2 + 1.2*wobble;
+    hy = b.y + 23*move;
+    ex = b.x + 2.2;
+    ey = b.y - 4*move;
+    hAlpha = 0.92*fade;
+    eAlpha = 0.30*fade;
+  }} else if(b.region === "base"){{
+    // Base p: el electrón es minoritario y difunde hacia la depleción (arriba).
+    ex = b.x + 2.2 + 1.2*wobble;
+    ey = b.y - 23*move;
+    hx = b.x - 2.2;
+    hy = b.y + 4*move;
+    eAlpha = 0.92*fade;
+    hAlpha = 0.30*fade;
+  }} else {{
+    // Depleción: el campo interno separa claramente la pareja.
+    ex = b.x + 3.0 + 0.8*wobble;
+    ey = b.y - 22*move;
+    hx = b.x - 3.0 - 0.8*wobble;
+    hy = b.y + 22*move;
+    eAlpha = 0.92*fade;
+    hAlpha = 0.92*fade;
+  }}
+
+  drawCarrier(hx,hy,1.9,"#7dd3fc",hAlpha); // h+
+  drawCarrier(ex,ey,1.9,"#fb7185",eAlpha); // e−
+}}
+
+function drawStats(){{
+  // Conteo acumulado EN TIEMPO REAL de los fotones representativos que ya
+  // han alcanzado la superficie de la celda. Los destinos se resuelven con
+  // R(lambda), alpha(lambda), Beer-Lambert, el espesor y R_Al.
+  const completed = nAbs + nFrontRef + nBackLoss + nEscape;
+  const nNoAbs = nFrontRef + nBackLoss + nEscape;
+  const pct = n => completed > 0 ? (100*n/completed).toFixed(0) + "%" : "—";
+
+  const stats = [
+    ["INCIDENTES", nIncident, ""],
+    ["ABSORBIDOS", nAbs, pct(nAbs)],
+    ["PARES e-/h+", nPairs, ""],
+    ["REF. FRONTAL", nFrontRef, pct(nFrontRef)],
+    ["NO ABSORBIDOS", nNoAbs, pct(nNoAbs)],
+    ["PERD. TRASERA", nBackLoss, pct(nBackLoss)],
+    ["ESCAPE FRONTAL", nEscape, pct(nEscape)],
+  ];
+
+  const gap = 6;
+  const y = H - 60;
+  const h = 46;
+  const boxW = (right-left-gap*(stats.length-1))/stats.length;
+
+  stats.forEach((s,i) => {{
+    const x = left + i*(boxW+gap);
+    roundedRect(x,y,boxW,h,8);
+    ctx.fillStyle = "rgba(255,255,255,.036)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(148,163,184,.12)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.font = "600 8px Inter, system-ui, sans-serif";
+    ctx.fillStyle = "rgba(148,163,184,.82)";
+    ctx.fillText(s[0], x+8, y+14);
+
+    ctx.font = "700 14px Inter, system-ui, sans-serif";
+    ctx.fillStyle = "rgba(241,245,249,.97)";
+    const value = s[2] ? `${{s[1]}} · ${{s[2]}}` : `${{s[1]}}`;
+    ctx.fillText(value, x+8, y+34);
+  }});
+
+  // El rebote en Al es un evento intermedio: después de reflejarse, ese
+  // mismo fotón todavía puede absorberse o escapar por el frente.
+  if(reflectorActivo){{
+    const txt = `REF. EN Al  ${{nAlRef}}`;
+    ctx.font = "600 9px Inter, system-ui, sans-serif";
+    const tw = ctx.measureText(txt).width;
+    roundedRect(right-tw-25, blockBottom-28, tw+17, 20, 7);
+    ctx.fillStyle = "rgba(245,193,86,.11)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(245,193,86,.18)";
+    ctx.stroke();
+    ctx.fillStyle = "rgba(253,230,138,.88)";
+    ctx.fillText(txt, right-tw-16, blockBottom-14);
+  }}
+}}
+
+function step(now){{
+  const dt = Math.min((now-lastTime)/1000,0.04);
+  lastTime = now;
+  drawScene(now);
+
+  nextSpawn -= dt;
+  if(nextSpawn <= 0){{
+    spawnPhoton();
+    scheduleNextSpawn();
+  }}
 
   photons.forEach(p => {{
-    if (p.state === "falling"){{
-      p.fracPos += p.vfrac;
-      const yy = yOfFrac(Math.min(Math.max(p.fracPos, 0), 1.15));
-      ctx.beginPath();
-      ctx.arc(p.x, yy, 3.2, 0, 7);
-      ctx.fillStyle = p.color;
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(p.x, yy, 6, 0, 7);
-      ctx.strokeStyle = p.color;
-      ctx.globalAlpha = 0.35;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
+    if(p.state === "incoming"){{
+      p.frac += p.speed*dt;
 
-      if (!p.transmitido && p.fracPos >= p.fracAbs && p.fracPos > 0){{
-        p.state = "absorbed";
-        nAbs++;
-        sparks.push({{
-          x: p.x,
-          y: yy,
-          r: 2,
-          life: 1.0,
-          hole: {{y: yy, vy: 1.2}},
-          elec: {{y: yy, vy: -1.4}},
-        }});
-      }}
-
-      if (p.transmitido && p.fracPos >= 1.0){{
-        if (reflectorActivo && Math.random() < RAl){{
-          p.reflected = true;
-          p.state = "returning";
-          p.fracPos = 1.0;
-          nRef++;
-          const dBack = -Math.log(Math.max(Math.random(), 1e-9)) /
-            Math.max(p.alpha_um, 1e-6);
-          if (dBack < W_total_um){{
-            p.escapeFront = false;
-            p.fracAbsReturn = fracOfDepth(W_total_um - dBack);
-          }} else{{
-            p.escapeFront = true;
-            p.fracAbsReturn = 0.0;
-          }}
-        }} else{{
-          p.state = "transmitted";
-          nTrans++;
+      // Un fotón cuenta como INCIDENTE cuando alcanza físicamente la
+      // superficie frontal. En ese mismo instante se decide la reflexión R(λ).
+      if(!p.frontDecision && p.frac >= 0){{
+        p.frontDecision = true;
+        nIncident++;
+        if(Math.random() < p.Rfront){{
+          p.state = "front_reflected";
+          nFrontRef++;
         }}
       }}
-    }} else if (p.state === "returning"){{
-      p.fracPos -= p.vfrac;
-      const yy = yOfFrac(Math.min(Math.max(p.fracPos, 0), 1));
-      ctx.beginPath();
-      ctx.arc(p.x, yy, 3.4, 0, 7);
-      ctx.fillStyle = p.color;
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(p.x, yy, 6.4, 0, 7);
-      ctx.strokeStyle = "#f6e05e";
-      ctx.globalAlpha = 0.6;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
 
-      if (!p.escapeFront && p.fracPos <= p.fracAbsReturn){{
-        p.state = "absorbed";
-        nAbs++;
-        sparks.push({{
-          x: p.x,
-          y: yy,
-          r: 2,
-          life: 1.0,
-          hole: {{y: yy, vy: 1.2}},
-          elec: {{y: yy, vy: -1.4}},
-        }});
-      }} else if (p.escapeFront && p.fracPos <= -0.04){{
-        p.state = "escaped";
+      if(p.state === "incoming"){{
+        drawPhoton(p,now,false);
+        if(!p.transmitted && p.frac >= p.fracAbs && p.frac > 0){{
+          absorb(p,yOfFrac(p.fracAbs),p.fracAbs);
+        }} else if(p.transmitted && p.frac >= 1.0){{
+          if(reflectorActivo && Math.random() < RAl){{
+            p.state = "returning";
+            p.frac = 1.0;
+            nAlRef++;
+            const dBack = -Math.log(Math.max(Math.random(),1e-9)) / Math.max(p.alpha,1e-8);
+            p.escapeFront = dBack >= Wtotal;
+            p.fracAbsReturn = p.escapeFront ? 0.0 : fracOfDepth(Wtotal-dBack);
+          }} else {{
+            p.state = "done";
+            nBackLoss++;
+          }}
+        }}
+      }}
+    }} else if(p.state === "front_reflected"){{
+      p.frac -= p.speed*dt*0.95;
+      drawPhoton(p,now,true);
+      if(p.frac < -0.20) p.state = "done";
+    }} else if(p.state === "returning"){{
+      p.frac -= p.speed*dt*0.93;
+      drawPhoton(p,now,true);
+      if(!p.escapeFront && p.frac <= p.fracAbsReturn){{
+        absorb(p,yOfFrac(p.fracAbsReturn),p.fracAbsReturn);
+      }} else if(p.escapeFront && p.frac < -0.16){{
+        p.state = "done";
         nEscape++;
       }}
     }}
   }});
 
-  photons = photons.filter(
-    p => p.state === "falling" || p.state === "returning",
-  );
+  photons = photons.filter(p => p.state !== "done" && p.state !== "absorbed");
 
-  sparks.forEach(s => {{
-    s.r += 1.4;
-    s.life -= 0.035;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r, 0, 7);
-    ctx.strokeStyle = `rgba(255,255,180,${{Math.max(s.life, 0)}})`;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    s.hole.y += s.hole.vy;
-    s.elec.y += s.elec.vy;
-    ctx.beginPath();
-    ctx.arc(s.x - 5, s.hole.y, 2.4, 0, 7);
-    ctx.fillStyle = `rgba(99,179,237,${{Math.max(s.life, 0)}})`;
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(s.x + 5, s.elec.y, 2.4, 0, 7);
-    ctx.fillStyle = `rgba(252,129,129,${{Math.max(s.life, 0)}})`;
-    ctx.fill();
-  }});
-  sparks = sparks.filter(s => s.life > 0);
+  bursts.forEach(b => updateBurst(b,dt));
+  bursts = bursts.filter(b => b.age < b.life);
 
-  ctx.font = "12px sans-serif";
-  ctx.fillStyle = "#e2e8f0";
-  const reflTxt = reflectorActivo
-    ? `   Reflejados: ${{nRef}}   Escape frontal: ${{nEscape}}`
-    : "";
-  ctx.fillText(
-    `Absorbidos: ${{nAbs}}   Transmitidos: ${{nTrans}}${{reflTxt}}`,
-    30,
-    H - 6,
-  );
-
+  // Dibujar los contadores dentro del canvas garantiza que se vean y que
+  // cambien cuadro a cuadro mientras los fotones recorren la celda.
+  drawStats();
+  updateStatsDom();
   requestAnimationFrame(step);
 }}
-
-step();
+requestAnimationFrame(step);
 </script>
 """
 
-    st.iframe(html_photons, height="content")
-    st.caption(
-        "Puntos de color = fotones. La profundidad de absorción se muestrea "
-        "con Beer–Lambert. Las bandas están comprimidas visualmente para "
-        "distinguir emisor, depleción y base."
-    )
+    components.html(html_photons, height=590, scrolling=False)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("λ", f"{single_wl:.0f} nm")
+    m2.metric("Irradiancia", f"{irr_soles:.2f} sol")
+    m3.metric("1/α", f"{single_depth_um:.2f} µm")
+    m4.metric("x₉₀", f"{single_x90_um:.2f} µm" if single_x90_um < 1e4 else "> 10 mm")
 
     # ============================================================
-    # VISTA 3D DEL BLOQUE
+    # VISTA 3D DEL BLOQUE — muestra Monte Carlo proporcional al flujo físico
     # ============================================================
-    st.markdown(
-        "##### Vista 3D del bloque de silicio "
-        "(arrastra para rotar, scroll para zoom)"
-    )
+    st.markdown("##### Vista 3D")
 
-    def _caja_mesh3d(
-        z0,
-        z1,
-        color,
-        opacidad,
-        nombre,
-        Lx=1.0,
-        Ly=1.0,
-    ):
+    def _caja_mesh3d(z0, z1, color, opacidad, nombre, Lx=1.0, Ly=1.0):
         xs = [-Lx, Lx, Lx, -Lx, -Lx, Lx, Lx, -Lx]
         ys = [-Ly, -Ly, Ly, Ly, -Ly, -Ly, Ly, Ly]
         zs = [z0, z0, z0, z0, z1, z1, z1, z1]
@@ -643,32 +1045,17 @@ step();
         j = [1, 2, 3, 5, 6, 7, 1, 5, 2, 6, 3, 7]
         k = [2, 3, 0, 6, 7, 4, 5, 4, 6, 5, 7, 6]
         return go.Mesh3d(
-            x=xs,
-            y=ys,
-            z=zs,
-            i=i,
-            j=j,
-            k=k,
-            color=color,
-            opacity=opacidad,
-            name=nombre,
-            showlegend=True,
-            flatshading=True,
+            x=xs, y=ys, z=zs, i=i, j=j, k=k,
+            color=color, opacity=opacidad, name=nombre,
+            showlegend=True, flatshading=True,
         )
 
     z0, z1 = 0.0, -1.0
-    zE = -0.24
-    zD = -0.34
+    zE, zD = -0.24, -0.34
     fig3d = go.Figure()
-    fig3d.add_trace(
-        _caja_mesh3d(z0, zE, "#63b3ed", 0.35, "Emisor n")
-    )
-    fig3d.add_trace(
-        _caja_mesh3d(zE, zD, "#f6ad55", 0.55, "Deplección")
-    )
-    fig3d.add_trace(
-        _caja_mesh3d(zD, z1, "#68d391", 0.25, "Base p")
-    )
+    fig3d.add_trace(_caja_mesh3d(z0, zE, "#63b3ed", 0.30, "Emisor n"))
+    fig3d.add_trace(_caja_mesh3d(zE, zD, "#f6ad55", 0.42, "Depleción"))
+    fig3d.add_trace(_caja_mesh3d(zD, z1, "#68d391", 0.22, "Base p"))
 
     def _z_de_depth(x_um):
         if x_um <= xn_um:
@@ -677,86 +1064,129 @@ step();
         if x_um <= xp_um:
             t = (x_um - xn_um) / max(xp_um - xn_um, 1e-9)
             return zE + t * (zD - zE)
-        t = min(
-            (x_um - xp_um) / max(W_total_um - xp_um, 1e-9),
-            1.0,
-        )
+        t = min((x_um - xp_um) / max(W_total_um - xp_um, 1e-9), 1.0)
         return zD + t * (z1 - zD)
 
-    rng3d = np.random.default_rng(7)
-    n_fot3d = 26
-    wl_lookup_arr = np.asarray(wl_lookup, dtype=float)
-    phi0_probs = np.clip(
-        np.asarray(phi0_lookup, dtype=float),
-        0.0,
-        None,
-    )
+    def _color_foton_3d(wl):
+        if wl < 380:
+            return "#8b5cf6"   # UV en falso color
+        if wl > 750:
+            return "#fb7185"   # IR en falso color
+        return wavelength_to_hex(wl)
 
-    if phi0_probs.sum() <= 0.0:
-        phi0_probs = np.full(
-            len(wl_lookup_arr),
-            1.0 / len(wl_lookup_arr),
-        )
+    # El número de puntos NO es un conteo arbitrario de fotones reales.
+    # Se obtiene como una muestra proporcional al flujo físico incidente.
+    # El máximo de 72 puntos sólo fija la resolución gráfica del muestreo.
+    N3D_MAX = 72
+    if S["anim_modo"] == "unico":
+        flujo_ref_3d = 1.5 * float(np.max(phi0_grid))
     else:
-        phi0_probs = phi0_probs / phi0_probs.sum()
+        flujo_ref_3d = 1.5 * float(np.trapezoid(phi0_grid, wl_grid))
+    peso_marcador_3d = flujo_ref_3d / N3D_MAX if flujo_ref_3d > 0 else np.inf
+    n_fot3d = int(np.clip(np.round(flujo_inc_phys / peso_marcador_3d), 0, N3D_MAX))
+    if flujo_inc_phys > 0 and n_fot3d == 0:
+        n_fot3d = 1
 
-    wl_muestras = rng3d.choice(
-        wl_lookup_arr,
-        size=n_fot3d,
-        replace=True,
-        p=phi0_probs,
-    )
-    alpha_muestras_um = np.interp(
-        wl_muestras,
-        wl_lookup_arr,
-        np.asarray(alpha_um_lookup, dtype=float),
-    )
-    x0_3d = rng3d.uniform(-0.85, 0.85, n_fot3d)
-    y0_3d = rng3d.uniform(-0.85, 0.85, n_fot3d)
-    t0_3d = rng3d.uniform(0.0, 0.55, n_fot3d)
-    xabs_3d = (
-        -np.log(rng3d.uniform(1e-3, 1.0, n_fot3d))
-        / np.maximum(alpha_muestras_um, 1e-6)
-    )
-    zabs_3d = np.array([
-        _z_de_depth(min(x_abs, W_total_um))
-        for x_abs in xabs_3d
-    ])
-    colores_3d = [
-        wavelength_to_hex(wl)
-        for wl in wl_muestras
-    ]
+    rng3d = np.random.default_rng(7)
+    wl_lookup_arr = np.asarray(wl_lookup, dtype=float)
 
-    n_frames_3d = 34
+    if S["anim_modo"] == "unico":
+        wl_muestras = np.full(n_fot3d, single_wl, dtype=float)
+    else:
+        phi_probs = np.clip(np.asarray(phi0_lookup, dtype=float), 0.0, None)
+        phi_probs = phi_probs / phi_probs.sum() if phi_probs.sum() > 0 else np.full_like(phi_probs, 1 / len(phi_probs))
+        wl_muestras = rng3d.choice(wl_lookup_arr, size=n_fot3d, replace=True, p=phi_probs)
+
+    alpha_muestras_um = np.interp(wl_muestras, wl_lookup_arr, np.asarray(alpha_um_lookup, dtype=float))
+    R_muestras = np.interp(wl_muestras, wl_lookup_arr, np.asarray(R_lookup, dtype=float))
+    colores_3d = [_color_foton_3d(wl) for wl in wl_muestras]
+    x0_3d = rng3d.uniform(-0.88, 0.88, n_fot3d)
+    y0_3d = rng3d.uniform(-0.88, 0.88, n_fot3d)
+    t0_3d = rng3d.uniform(0.0, 0.22, n_fot3d)
+
+    # Cada marcador sigue el mismo balance físico de la vista 2D:
+    # reflexión frontal -> absorción Beer–Lambert -> pérdida trasera o
+    # reflexión en Al -> absorción en segundo paso / escape frontal.
+    eventos_3d = []
+    z_obj_3d = []
+    for i in range(n_fot3d):
+        if rng3d.random() < R_muestras[i]:
+            eventos_3d.append("Reflejado frontal")
+            z_obj_3d.append(0.30)
+            continue
+
+        d1 = -np.log(max(rng3d.random(), 1e-12)) / max(alpha_muestras_um[i], 1e-12)
+        if d1 < W_total_um:
+            eventos_3d.append("Absorbido")
+            z_obj_3d.append(_z_de_depth(d1))
+            continue
+
+        if S["reflector_trasero"] and rng3d.random() < c.R_ALUMINIO_EFECTIVA:
+            d2 = -np.log(max(rng3d.random(), 1e-12)) / max(alpha_muestras_um[i], 1e-12)
+            if d2 < W_total_um:
+                eventos_3d.append("Absorbido tras reflexión Al")
+                z_obj_3d.append(_z_de_depth(W_total_um - d2))
+            else:
+                eventos_3d.append("Escape frontal")
+                z_obj_3d.append(0.30)
+        else:
+            eventos_3d.append("Pérdida trasera")
+            z_obj_3d.append(-1.12)
+
+    n_frames_3d = 42
     frames_3d = []
     for fr in range(n_frames_3d):
         tf = fr / (n_frames_3d - 1)
         zs_frame = []
         for i in range(n_fot3d):
             if tf < t0_3d[i]:
-                zs_frame.append(0.25)
-            else:
-                prog = min(
-                    (tf - t0_3d[i]) / 0.45,
-                    1.0,
-                )
-                zs_frame.append(
-                    0.25 + prog * (zabs_3d[i] - 0.25)
-                )
+                zs_frame.append(0.28)
+                continue
+
+            u = (tf - t0_3d[i]) / max(1.0 - t0_3d[i], 1e-9)
+            u = float(np.clip(u, 0.0, 1.0))
+            evento = eventos_3d[i]
+            zfinal = z_obj_3d[i]
+
+            # Fase incidente: desde arriba hasta la superficie.
+            if u < 0.22:
+                zs_frame.append(0.28 * (1.0 - u / 0.22))
+            elif evento == "Reflejado frontal":
+                p = (u - 0.22) / 0.78
+                zs_frame.append(0.30 * p)
+            elif evento == "Absorbido":
+                p = min((u - 0.22) / 0.58, 1.0)
+                zs_frame.append(p * zfinal)
+            elif evento == "Pérdida trasera":
+                p = min((u - 0.22) / 0.70, 1.0)
+                zs_frame.append(p * zfinal)
+            elif evento == "Absorbido tras reflexión Al":
+                if u < 0.62:
+                    p = (u - 0.22) / 0.40
+                    zs_frame.append(-p)
+                else:
+                    p = min((u - 0.62) / 0.30, 1.0)
+                    zs_frame.append(-1.0 + p * (zfinal + 1.0))
+            else:  # Escape frontal tras reflexión en Al
+                if u < 0.55:
+                    p = (u - 0.22) / 0.33
+                    zs_frame.append(-p)
+                elif u < 0.88:
+                    p = (u - 0.55) / 0.33
+                    zs_frame.append(-1.0 + p)
+                else:
+                    p = (u - 0.88) / 0.12
+                    zs_frame.append(0.30 * p)
+
         frames_3d.append(
             go.Frame(
-                data=[
-                    go.Scatter3d(
-                        x=x0_3d,
-                        y=y0_3d,
-                        z=zs_frame,
-                        mode="markers",
-                        marker=dict(
-                            size=5,
-                            color=colores_3d,
-                        ),
-                    )
-                ],
+                data=[go.Scatter3d(
+                    x=x0_3d, y=y0_3d, z=zs_frame,
+                    mode="markers",
+                    marker=dict(size=5, color=colores_3d, opacity=0.95),
+                    text=[f"λ={wl:.0f} nm · {ev}" for wl, ev in zip(wl_muestras, eventos_3d)],
+                    hovertemplate="%{text}<extra></extra>",
+                )],
                 traces=[3],
                 name=str(fr),
             )
@@ -764,70 +1194,44 @@ step();
 
     fig3d.add_trace(
         go.Scatter3d(
-            x=x0_3d,
-            y=y0_3d,
-            z=[0.25] * n_fot3d,
+            x=x0_3d, y=y0_3d, z=[0.28] * n_fot3d,
             mode="markers",
-            marker=dict(size=5, color=colores_3d),
+            marker=dict(size=5, color=colores_3d, opacity=0.95),
+            text=[f"λ={wl:.0f} nm · {ev}" for wl, ev in zip(wl_muestras, eventos_3d)],
+            hovertemplate="%{text}<extra></extra>",
             name="Fotones",
         )
     )
     fig3d.frames = frames_3d
     fig3d.update_layout(
         template="plotly_dark",
-        height=520,
+        height=540,
+        title=dict(
+            text=f"Φinc = {_fmt_flujo(flujo_inc_phys)} {flujo_unidad}",
+            x=0.02,
+            xanchor="left",
+            font=dict(size=13, color="#cbd5e0"),
+        ),
         scene=dict(
-            xaxis=dict(
-                title="",
-                showticklabels=False,
-                showbackground=False,
-            ),
-            yaxis=dict(
-                title="",
-                showticklabels=False,
-                showbackground=False,
-            ),
-            zaxis=dict(
-                title="profundidad (comprimida)",
-                showticklabels=False,
-            ),
+            xaxis=dict(title="", showticklabels=False, showbackground=False),
+            yaxis=dict(title="", showticklabels=False, showbackground=False),
+            zaxis=dict(title="profundidad (comprimida)", showticklabels=False),
             aspectmode="manual",
-            aspectratio=dict(x=1, y=1, z=1.3),
+            aspectratio=dict(x=1, y=1, z=1.25),
             camera=dict(eye=dict(x=1.4, y=-1.6, z=0.9)),
         ),
-        updatemenus=[
-            dict(
-                type="buttons",
-                showactive=False,
-                y=1.05,
-                x=0.0,
-                buttons=[
-                    dict(
-                        label="▶ Reproducir caída de fotones",
-                        method="animate",
-                        args=[
-                            None,
-                            dict(
-                                frame=dict(
-                                    duration=60,
-                                    redraw=True,
-                                ),
-                                fromcurrent=True,
-                            ),
-                        ],
-                    )
-                ],
-            )
-        ],
+        updatemenus=[dict(
+            type="buttons", showactive=False, y=1.03, x=0.0,
+            buttons=[dict(
+                label="▶ Reproducir",
+                method="animate",
+                args=[None, dict(frame=dict(duration=65, redraw=True), fromcurrent=True)],
+            )],
+        )],
         legend=dict(orientation="h", y=-0.02),
-        margin=dict(l=0, r=0, t=40, b=0),
+        margin=dict(l=0, r=0, t=58, b=0),
     )
     st.plotly_chart(fig3d, width="stretch")
-    st.caption(
-        "La vista 3D muestra el mismo proceso en un volumen con escala "
-        "vertical comprimida."
-    )
-
     # ============================================================
     # PERFIL G(x) Y PROFUNDIDAD 1/α
     # ============================================================
@@ -835,7 +1239,7 @@ step();
 
     with c1:
         x_perfil = np.linspace(0, W_total_um, 600)
-        G_perfil = generacion_actual(x_perfil)
+        G_perfil = generacion_actual_vista(x_perfil)
         i_wl = int(np.argmin(np.abs(wl_grid - S["lambda_perfil"])))
         fig = go.Figure()
         fig.add_trace(
@@ -854,7 +1258,7 @@ step();
             annotation_text="juntura (xj=dn)",
         )
         fig.update_layout(
-            title=f"Tasa de generación G(x) a λ={S['lambda_perfil']:.0f} nm",
+            title=f"Tasa de generación G(x) a λ={S['lambda_perfil']:.0f} nm ({irr_soles:.2f} soles)",
             xaxis_title="Profundidad x [µm]",
             yaxis_title="G [cm⁻³ s⁻¹ nm⁻¹]",
             height=380,
@@ -894,119 +1298,108 @@ step();
         st.plotly_chart(fig2, width="stretch")
 
     # ============================================================
-    # GENERACIÓN TOTAL INTEGRADA
+    # GENERACIÓN — coherente con el modo de iluminación seleccionado
     # ============================================================
-    st.markdown("##### Generación total integrada sobre AM1.5G")
+    x_gext = np.linspace(0, W_total_um, 500)
+    G_matrix = generacion_actual_vista(x_gext)
+    x_gext_cm = x_gext * 1e-4
 
-    x_gext = np.linspace(0, W_total_um, 400)
-    G_gext_matrix = generacion_actual(x_gext)
-    G_ext = np.maximum(
-        np.trapezoid(G_gext_matrix, wl_grid, axis=1),
-        0.0,
-    )
+    if S["anim_modo"] == "unico":
+        i_focus = int(np.argmin(np.abs(wl_grid - single_wl)))
+        G_focus = np.maximum(G_matrix[:, i_focus], 0.0)
+        titulo_generacion = f"Generación a λ = {wl_grid[i_focus]:.0f} nm"
+        y_generacion = "G [cm⁻³ s⁻¹ nm⁻¹]"
+        unidad_pares = "pares·cm⁻²·s⁻¹·nm⁻¹"
+
+        f_loss_focus = float(frac_back_phys[i_focus] + frac_escape_phys[i_focus])
+        flujo_perdido_focus = flujo_inc_phys * f_loss_focus
+    else:
+        G_focus = np.maximum(np.trapezoid(G_matrix, wl_grid, axis=1), 0.0)
+        titulo_generacion = "Generación integrada AM1.5G"
+        y_generacion = "G [cm⁻³ s⁻¹]"
+        unidad_pares = "pares·cm⁻²·s⁻¹"
+        flujo_perdido_focus = flujo_back_phys + flujo_escape_phys
+        f_loss_focus = flujo_perdido_focus / flujo_inc_phys if flujo_inc_phys > 0 else 0.0
+
+    st.markdown(f"##### {titulo_generacion}")
 
     fig_gext = go.Figure()
-    fig_gext.add_trace(
-        go.Scatter(
-            x=x_gext,
-            y=G_ext,
-            mode="lines",
-            line=dict(color="#f687b3", width=3),
-            name="G_ext(x)",
-        )
-    )
+    fig_gext.add_trace(go.Scatter(
+        x=x_gext, y=G_focus, mode="lines",
+        line=dict(color="#f687b3", width=3), name="G(x)",
+    ))
     fig_gext.add_vline(
-        x=S["dn_um"],
-        line_dash="dot",
-        line_color="orange",
-        annotation_text="juntura (xj=dn)",
+        x=S["dn_um"], line_dash="dot", line_color="orange",
+        annotation_text="juntura",
     )
     fig_gext.update_layout(
-        title="G_ext(x) = ∫ G(x,λ) dλ",
         xaxis_title="Profundidad x [µm]",
-        yaxis_title="G_ext [cm⁻³ s⁻¹]",
-        height=380,
+        yaxis_title=y_generacion,
+        height=360,
         template="plotly_dark",
+        margin=dict(t=30),
+        showlegend=False,
     )
     st.plotly_chart(fig_gext, width="stretch")
 
-    G_ext_total = np.trapezoid(G_ext, x_gext)
+    # Integrar G sobre profundidad exige convertir µm -> cm.
     mask_emisor = x_gext <= S["dn_um"]
     mask_base = x_gext > S["dn_um"]
-    G_ext_emisor = (
-        np.trapezoid(G_ext[mask_emisor], x_gext[mask_emisor])
-        if mask_emisor.sum() > 1
-        else 0.0
+    flujo_pares_total = float(np.trapezoid(G_focus, x_gext_cm))
+    flujo_pares_emisor = (
+        float(np.trapezoid(G_focus[mask_emisor], x_gext_cm[mask_emisor]))
+        if mask_emisor.sum() > 1 else 0.0
     )
-    G_ext_base = (
-        np.trapezoid(G_ext[mask_base], x_gext[mask_base])
-        if mask_base.sum() > 1
-        else 0.0
-    )
-
-    frac_emisor_gen = (
-        G_ext_emisor / G_ext_total
-        if G_ext_total > 0
-        else 0.0
-    )
-    frac_base_gen = (
-        G_ext_base / G_ext_total
-        if G_ext_total > 0
-        else 0.0
+    flujo_pares_base = (
+        float(np.trapezoid(G_focus[mask_base], x_gext_cm[mask_base]))
+        if mask_base.sum() > 1 else 0.0
     )
 
-    frac_r_esp, frac_a_esp, frac_t_esp, frac_escape_esp = (
-        f.balance_fotones_con_reflector(
-            R_grid,
-            alpha_grid,
-            W_total_um,
-            reflector_trasero_activo=S["reflector_trasero"],
-            R_aluminio=c.R_ALUMINIO_EFECTIVA,
-        )
-    )
-    peso = phi0_grid / np.trapezoid(phi0_grid, wl_grid)
-    frac_t_ponderada = np.trapezoid(
-        frac_t_esp * peso,
-        wl_grid,
-    )
-    frac_escape_ponderada = np.trapezoid(
-        frac_escape_esp * peso,
-        wl_grid,
-    )
-    frac_perdida_total = frac_t_ponderada + frac_escape_ponderada
+    frac_emisor_gen = flujo_pares_emisor / flujo_pares_total if flujo_pares_total > 0 else 0.0
+    frac_base_gen = flujo_pares_base / flujo_pares_total if flujo_pares_total > 0 else 0.0
 
     gm1, gm2, gm3 = st.columns(3)
     gm1.metric(
         "Pares generados en el emisor",
         f"{100 * frac_emisor_gen:.1f} %",
+        delta=f"{flujo_pares_emisor:.2e} {unidad_pares}",
+        delta_color="off",
     )
     gm2.metric(
         "Pares generados en la base",
         f"{100 * frac_base_gen:.1f} %",
+        delta=f"{flujo_pares_base:.2e} {unidad_pares}",
+        delta_color="off",
     )
     gm3.metric(
         "Fotones perdidos",
-        f"{100 * frac_perdida_total:.1f} %",
+        f"{100 * f_loss_focus:.1f} %",
+        delta=f"{flujo_perdido_focus:.2e} {flujo_unidad}",
+        delta_color="off",
     )
-    st.caption(
-        "Las fracciones de generación se obtienen integrando G_ext(x) "
-        "por región. La pérdida óptica se pondera con el espectro AM1.5G."
-    )
-
     # ============================================================
     # MAPA λ-x
     # ============================================================
-    st.markdown("##### Mapa 2D de generación G(x,λ)")
+    st.markdown("##### Mapa G(x,λ)")
 
     x_mapa = np.linspace(0, W_total_um, 220)
-    G_mapa = generacion_actual(x_mapa)
+    G_mapa = generacion_actual_vista(x_mapa)
     fig3 = go.Figure(
         data=go.Heatmap(
             z=np.log10(np.maximum(G_mapa, 1e-6)).T,
             x=x_mapa,
             y=wl_grid,
             colorscale="Inferno",
-            colorbar_title="log₁₀G",
+            colorbar=dict(
+                title=dict(text="log₁₀ G", side="right", font=dict(size=12)),
+                x=1.025,
+                y=0.5,
+                len=0.78,
+                thickness=18,
+                tickfont=dict(size=10),
+                outlinewidth=0,
+            ),
+            hovertemplate="x=%{x:.2f} µm<br>λ=%{y:.0f} nm<br>log₁₀G=%{z:.2f}<extra></extra>",
         )
     )
     fig3.add_hline(
@@ -1040,7 +1433,7 @@ step();
                     color="lime",
                     symbol="circle",
                 ),
-                name=f"1/α a {_lambda_sel:.0f} nm",
+                name=f"1/α · {_lambda_sel:.0f} nm",
                 hovertemplate=(
                     "λ=%{y:.0f} nm<br>"
                     "1/α=%{x:.2f} µm<extra></extra>"
@@ -1058,7 +1451,7 @@ step();
                     color="cyan",
                     symbol="x",
                 ),
-                name=f"x90 a {_lambda_sel:.0f} nm",
+                name=f"x₉₀ · {_lambda_sel:.0f} nm",
                 hovertemplate=(
                     "λ=%{y:.0f} nm<br>"
                     "x90=%{x:.2f} µm<extra></extra>"
@@ -1069,32 +1462,24 @@ step();
     fig3.update_layout(
         xaxis_title="Profundidad x [µm]",
         yaxis_title="λ [nm]",
-        height=420,
+        height=440,
         template="plotly_dark",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(11,14,20,0.72)",
+            bordercolor="rgba(148,163,184,0.18)",
+            borderwidth=1,
+            font=dict(size=11),
+        ),
+        margin=dict(l=65, r=125, t=72, b=55),
     )
     st.plotly_chart(fig3, width="stretch")
 
-    am1, am2, am3 = st.columns(3)
-    am1.metric(
-        "Profundidad 1/α",
-        f"{_prof_abs_sel:.2f} µm",
-    )
-    am2.metric(
-        "Profundidad x₉₀",
-        f"{_x90_sel:.2f} µm"
-        if _x90_sel <= 9999
-        else "> 10 mm",
-    )
-    am3.metric(
-        "Absorbido en un recorrido",
-        f"{100 * _frac_abs_sel:.1f} %",
-    )
-    st.caption(
-        "El punto verde marca 1/α y la cruz cian marca x₉₀ para la "
-        "longitud de onda seleccionada."
-    )
-
-    with st.expander("Datos utilizados"):
+    with st.expander("Fuentes"):
         st.markdown(
             "**Óptica:** Schinke.csv, datos de k(λ) del silicio; "
             "α(λ) = 4πk(λ)/λ.\n\n"
@@ -1639,62 +2024,57 @@ step();
 # ------------------------------------------------------------------
 with tab3:
     st.subheader("Ensayo eléctrico de la celda p-n")
-
     st.caption(
-        "La pestaña sigue la cadena física: difusión de portadores, formación "
-        "de la zona de depleción, campo interno y ensayo iluminado J–V."
+        "Difusión localizada, formación de la juntura y respuesta eléctrica "
+        "bajo iluminación."
     )
 
     # ============================================================
-    # VARIABLES LOCALES EXPLÍCITAS
+    # VARIABLES LOCALES Y PARÁMETROS TÉRMICOS
     # ============================================================
-    # Estas variables ya existen en el modelo global, pero se asignan aquí
-    # para que la pestaña sea autocontenida y no dependa de nombres visuales.
     dn_tab3_um = float(S["dn_um"])
     Wtotal_tab3_um = float(W_total_um)
-    xj_tab3_um = dn_tab3_um
     xn_tab3_um = float(xn_um)
     xp_tab3_um = float(xp_um)
     Wdep_tab3_um = max(xp_tab3_um - xn_tab3_um, 0.0)
 
     if Wdep_tab3_um > 0.0:
-        frac_xn_visual = float(
-            np.clip(
-                (xj_tab3_um - xn_tab3_um) / Wdep_tab3_um,
-                0.0,
-                1.0,
-            )
-        )
+        frac_xn_visual = float(np.clip(
+            (dn_tab3_um - xn_tab3_um) / Wdep_tab3_um,
+            0.0,
+            1.0,
+        ))
     else:
         frac_xn_visual = 0.5
-
     frac_xp_visual = 1.0 - frac_xn_visual
+
+    # Parámetros térmicos coherentes con T actual.
+    params_T_tab3 = f.J0_con_temperatura(
+        T_K,
+        S["NA"],
+        S["ND"],
+        S["tau_n_us"],
+        S["tau_p_us"],
+    )
+    ni_tab3 = params_T_tab3["ni_cm3"]
+    Dn_tab3 = params_T_tab3["Dn_cm2_s"]
+    Dp_tab3 = params_T_tab3["Dp_cm2_s"]
+    Ln_tab3_cm = params_T_tab3["Ln_cm"]
+    Lp_tab3_cm = params_T_tab3["Lp_cm"]
+    J0_tab3 = params_T_tab3["J0_A_cm2"]
 
     # ============================================================
     # 1. FORMACIÓN DE LA JUNTURA
     # ============================================================
     st.markdown("### 1. Formación de la juntura p-n")
     st.caption(
-        "Al poner en contacto una base p y un emisor n, los portadores móviles "
-        "difunden y se recombinan cerca de la interfaz. Quedan expuestos iones "
-        "fijos, aparece la zona de depleción y se establece el campo interno."
+        "Los portadores cercanos a la interfaz difunden y se recombinan. "
+        "El estado final deja iones fijos expuestos en la zona de depleción; "
+        "el bulk profundo permanece en equilibrio local."
     )
 
-    n_ion_p = int(
-        np.clip(
-            np.interp(np.log10(S["NA"]), [14, 17], [6, 46]),
-            6,
-            46,
-        )
-    )
-    n_ion_n = int(
-        np.clip(
-            np.interp(np.log10(S["ND"]), [17, 20], [10, 60]),
-            10,
-            60,
-        )
-    )
-
+    n_ion_p = int(np.clip(np.interp(np.log10(S["NA"]), [14, 17], [6, 46]), 6, 46))
+    n_ion_n = int(np.clip(np.interp(np.log10(S["ND"]), [17, 20], [10, 60]), 10, 60))
     rng_j = np.random.default_rng(11)
     xL, xR = -1.0, 1.0
     ionsP_x = rng_j.uniform(xL, -0.08, n_ion_p)
@@ -1730,184 +2110,114 @@ with tab3:
         )
 
     fig_j = go.Figure()
-    fig_j.add_trace(_caja_3d(xL, -wP_3d, "#4a5568", 0.10, "Base p (bulk)"))
+    fig_j.add_trace(_caja_3d(xL, -wP_3d, "#4a5568", 0.10, "Base p"))
     fig_j.add_trace(_caja_3d(-wP_3d, wN_3d, "#f6ad55", 0.28, "Depleción"))
-    fig_j.add_trace(_caja_3d(wN_3d, xR, "#4a5568", 0.10, "Emisor n (bulk)"))
+    fig_j.add_trace(_caja_3d(wN_3d, xR, "#4a5568", 0.10, "Emisor n"))
 
     ion_p_expuesto = ionsP_x >= -wP_3d
     ion_n_expuesto = ionsN_x <= wN_3d
-    dest_p_x = np.clip(ionsP_x - 0.35, xL + 0.05, -0.05)
-    dest_n_x = np.clip(ionsN_x + 0.35, 0.05, xR - 0.05)
-    recombina_p = ion_p_expuesto
-    recombina_n = ion_n_expuesto
+    dest_p_x = np.where(ion_p_expuesto, 0.0, ionsP_x)
+    dest_n_x = np.where(ion_n_expuesto, 0.0, ionsN_x)
 
-    fig_j.add_trace(
-        go.Scatter3d(
-            x=ionsP_x,
-            y=ionsP_y,
-            z=ionsP_z,
-            mode="markers",
-            name="Iones aceptores",
-            marker=dict(
-                size=5,
-                color=np.where(ion_p_expuesto, "#fc8181", "#718096"),
-                symbol="circle-open",
-                line=dict(width=2),
-            ),
-        )
+    fig_j.add_trace(go.Scatter3d(
+        x=ionsP_x,
+        y=ionsP_y,
+        z=ionsP_z,
+        mode="markers",
+        name="Iones aceptores",
+        marker=dict(
+            size=5,
+            color=np.where(ion_p_expuesto, "#fc8181", "#718096"),
+            symbol="circle-open",
+            line=dict(width=2),
+        ),
+    ))
+    fig_j.add_trace(go.Scatter3d(
+        x=ionsN_x,
+        y=ionsN_y,
+        z=ionsN_z,
+        mode="markers",
+        name="Iones donadores",
+        marker=dict(
+            size=5,
+            color=np.where(ion_n_expuesto, "#63b3ed", "#718096"),
+            symbol="circle-open",
+            line=dict(width=2),
+        ),
+    ))
+
+    progreso_juntura = st.slider(
+        "Progreso de formación",
+        0.0,
+        1.0,
+        1.0,
+        0.01,
+        key="tab3_progreso_juntura",
+        help="0: antes del contacto; 1: estado final.",
     )
-    fig_j.add_trace(
-        go.Scatter3d(
-            x=ionsN_x,
-            y=ionsN_y,
-            z=ionsN_z,
-            mode="markers",
-            name="Iones donadores",
-            marker=dict(
-                size=5,
-                color=np.where(ion_n_expuesto, "#63b3ed", "#718096"),
-                symbol="circle-open",
-                line=dict(width=2),
-            ),
-        )
-    )
+    avance = min(progreso_juntura / 0.60, 1.0)
+    hx_anim = (ionsP_x + (dest_p_x - ionsP_x) * avance).astype(object)
+    ex_anim = (ionsN_x + (dest_n_x - ionsN_x) * avance).astype(object)
+    if progreso_juntura >= 0.62:
+        for idx in np.where(ion_p_expuesto)[0]:
+            hx_anim[idx] = None
+        for idx in np.where(ion_n_expuesto)[0]:
+            ex_anim[idx] = None
 
-    n_frames_j = 36
-    frames_j = []
-    for fr in range(n_frames_j):
-        tf = fr / (n_frames_j - 1)
-        hx = ionsP_x + (dest_p_x - ionsP_x) * tf
-        ex = ionsN_x + (dest_n_x - ionsN_x) * tf
-        hx_anim = hx.astype(object)
-        ex_anim = ex.astype(object)
+    fig_j.add_trace(go.Scatter3d(
+        x=hx_anim,
+        y=ionsP_y,
+        z=ionsP_z,
+        mode="markers",
+        name="Huecos móviles",
+        marker=dict(size=4, color="#63b3ed"),
+    ))
+    fig_j.add_trace(go.Scatter3d(
+        x=ex_anim,
+        y=ionsN_y,
+        z=ionsN_z,
+        mode="markers",
+        name="Electrones móviles",
+        marker=dict(size=4, color="#fc8181"),
+    ))
+    if progreso_juntura >= 0.85:
+        fig_j.add_trace(go.Scatter3d(
+            x=[-wP_3d, wN_3d],
+            y=[0, 0],
+            z=[0, 0],
+            mode="lines+markers",
+            line=dict(color="#f6ad55", width=7),
+            marker=dict(size=7, color="#f6ad55", symbol="diamond"),
+            name="Campo interno E",
+        ))
 
-        if tf >= 0.5:
-            for idx in np.where(recombina_p)[0]:
-                hx_anim[idx] = None
-            for idx in np.where(recombina_n)[0]:
-                ex_anim[idx] = None
-
-        frames_j.append(
-            go.Frame(
-                data=[
-                    go.Scatter3d(
-                        x=hx_anim,
-                        y=ionsP_y,
-                        z=ionsP_z,
-                        mode="markers",
-                        marker=dict(size=4, color="#63b3ed"),
-                    ),
-                    go.Scatter3d(
-                        x=ex_anim,
-                        y=ionsN_y,
-                        z=ionsN_z,
-                        mode="markers",
-                        marker=dict(size=4, color="#fc8181"),
-                    ),
-                ],
-                traces=[5, 6],
-                name=str(fr),
-            )
-        )
-
-    fig_j.add_trace(
-        go.Scatter3d(
-            x=ionsP_x,
-            y=ionsP_y,
-            z=ionsP_z,
-            mode="markers",
-            name="Huecos móviles",
-            marker=dict(size=4, color="#63b3ed"),
-        )
-    )
-    fig_j.add_trace(
-        go.Scatter3d(
-            x=ionsN_x,
-            y=ionsN_y,
-            z=ionsN_z,
-            mode="markers",
-            name="Electrones móviles",
-            marker=dict(size=4, color="#fc8181"),
-        )
-    )
-    fig_j.frames = frames_j
     fig_j.update_layout(
         template="plotly_dark",
         height=540,
         scene=dict(
-            xaxis=dict(
-                title="p  ⟵           ⟶  n",
-                showticklabels=False,
-                range=[-1.0, 1.0],
-            ),
-            yaxis=dict(showticklabels=False, title="", range=[-1.0, 1.0]),
-            zaxis=dict(showticklabels=False, title="", range=[-1.0, 1.0]),
+            xaxis=dict(title="p  ⟵           ⟶  n", showticklabels=False, range=[-1, 1]),
+            yaxis=dict(showticklabels=False, title="", range=[-1, 1]),
+            zaxis=dict(showticklabels=False, title="", range=[-1, 1]),
             aspectmode="manual",
             aspectratio=dict(x=1.3, y=1, z=1),
             camera=dict(eye=dict(x=1.3, y=-1.7, z=0.7)),
         ),
-        updatemenus=[
-            dict(
-                type="buttons",
-                showactive=False,
-                y=1.06,
-                x=0.0,
-                buttons=[
-                    dict(
-                        label="▶ Reproducir formación",
-                        method="animate",
-                        args=[
-                            None,
-                            dict(
-                                frame=dict(duration=70, redraw=True),
-                                transition=dict(duration=0),
-                                fromcurrent=True,
-                                mode="immediate",
-                            ),
-                        ],
-                    )
-                ],
-            )
-        ],
         legend=dict(orientation="h", y=-0.02),
         margin=dict(l=0, r=0, t=40, b=0),
-        annotations=[
-            dict(
-                text=f"Ψ₀ ≈ {Psi0:.3f} V",
-                x=0.5,
-                y=1.0,
-                xref="paper",
-                yref="paper",
-                showarrow=False,
-                font=dict(color="#f6ad55", size=14),
-            )
-        ],
     )
     st.plotly_chart(fig_j, width="stretch")
-    st.caption(
-        "Los iones se muestran como una representación visual logarítmica. "
-        "La zona de depleción se reparte según NA y ND; los portadores móviles "
-        "se alejan hacia sus regiones neutras y desaparecen al recombinarse."
-    )
 
     j1, j2, j3 = st.columns(3)
     j1.metric("Ψ₀", f"{Psi0:.3f} V")
     j2.metric("Wdep", f"{Wdep_tab3_um:.2f} µm")
-    j3.metric(
-        "Reparto de Wdep",
-        f"p: {100 * frac_xp_visual:.1f}% | n: {100 * frac_xn_visual:.1f}%",
-    )
+    j3.metric("Reparto Wdep", f"p: {100 * frac_xp_visual:.1f}% | n: {100 * frac_xn_visual:.1f}%")
 
     # ============================================================
     # 2. CONDICIONES DEL ENSAYO
     # ============================================================
     st.markdown("### 2. Condiciones del ensayo")
-    st.caption("Los controles principales se encuentran en la barra lateral.")
 
-    malla = f.modelo_malla_frontal_plata(
-        S["num_dedos"],
-        S["ancho_dedo_um"],
-    )
+    malla = f.modelo_malla_frontal_plata(S["num_dedos"], S["ancho_dedo_um"])
     Rs_base = c.RS_BASE_OHM_CM2
     Rs_malla = malla["Rs_malla_ohm_cm2"]
     Rs_extra = S["Rs_extra"]
@@ -1919,6 +2229,7 @@ with tab3:
     p3.metric("n idealidad", f"{S['n_ideal']:.2f}")
     p4.metric("Rp", f"{S['Rp']:.2e} Ω·cm²")
     p5.metric("Rs total", f"{Rs_total:.4f} Ω·cm²")
+    st.caption(f"ni(T) = {ni_tab3:.3e} cm⁻³ · J0(T) = {J0_tab3:.3e} A/cm²")
 
     # ============================================================
     # 3. ENSAYO J–V Y P–V
@@ -1928,7 +2239,7 @@ with tab3:
     JL_con_sombra = malla["fraccion_iluminada"] * JL_A_cm2
     resultado = f.simular_celda_JV(
         JL_con_sombra,
-        J0_A_cm2,
+        J0_tab3,
         T_K,
         S["irradiancia_soles"],
         S["n_ideal"],
@@ -1943,47 +2254,58 @@ with tab3:
         resultado["P_array_W_cm2"] * 1e3,
     )
 
-    frames = []
-    n_frames = 60
-    idxs = np.linspace(0, len(V_arr) - 1, n_frames).astype(int)
-    for k in idxs:
-        frames.append(
-            go.Frame(
-                data=[
-                    go.Scatter(x=V_arr, y=J_arr, mode="lines", line=dict(color="#68d391", width=3)),
-                    go.Scatter(x=[V_arr[k]], y=[J_arr[k]], mode="markers", marker=dict(color="#f6ad55", size=14)),
-                    go.Scatter(x=V_arr, y=P_arr, mode="lines", line=dict(color="#63b3ed", width=3), xaxis="x2", yaxis="y2"),
-                    go.Scatter(x=[V_arr[k]], y=[P_arr[k]], mode="markers", marker=dict(color="#f6ad55", size=14), xaxis="x2", yaxis="y2"),
-                ],
-                name=str(k),
-            )
-        )
-
-    fig_iv = go.Figure(
-        data=[
-            go.Scatter(x=V_arr, y=J_arr, mode="lines", line=dict(color="#68d391", width=3), name="J–V"),
-            go.Scatter(x=[V_arr[0]], y=[J_arr[0]], mode="markers", marker=dict(color="#f6ad55", size=14), name="Punto de barrido"),
-            go.Scatter(x=V_arr, y=P_arr, mode="lines", line=dict(color="#63b3ed", width=3), name="P–V", xaxis="x2", yaxis="y2"),
-            go.Scatter(x=[V_arr[0]], y=[P_arr[0]], mode="markers", marker=dict(color="#f6ad55", size=14), xaxis="x2", yaxis="y2", showlegend=False),
-            go.Scatter(x=[resultado["Vmp_V"]], y=[resultado["Jmp_A_cm2"] * 1e3], mode="markers+text", marker=dict(color="#f6e05e", size=12, symbol="diamond"), text=["MPP"], textposition="top center", name="MPP en J–V"),
-            go.Scatter(x=[resultado["Vmp_V"]], y=[resultado["Pmax_W_cm2"] * 1e3], mode="markers+text", marker=dict(color="#f6e05e", size=12, symbol="diamond"), text=["MPP"], textposition="top center", name="MPP en P–V", xaxis="x2", yaxis="y2"),
-        ],
-        frames=frames,
+    fig_iv = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Curva J–V", "Curva P–V"),
+        horizontal_spacing=0.12,
     )
+    fig_iv.add_trace(go.Scatter(
+        x=V_arr,
+        y=J_arr,
+        mode="lines",
+        name="J–V",
+        line=dict(color="#68d391", width=3),
+    ), row=1, col=1)
+    fig_iv.add_trace(go.Scatter(
+        x=V_arr,
+        y=P_arr,
+        mode="lines",
+        name="P–V",
+        line=dict(color="#63b3ed", width=3),
+    ), row=1, col=2)
+    fig_iv.add_trace(go.Scatter(
+        x=[resultado["Vmp_V"]],
+        y=[resultado["Jmp_A_cm2"] * 1e3],
+        mode="markers+text",
+        text=["MPP"],
+        textposition="top center",
+        marker=dict(color="#f6e05e", size=12, symbol="diamond"),
+        name="MPP",
+    ), row=1, col=1)
+    fig_iv.add_trace(go.Scatter(
+        x=[resultado["Vmp_V"]],
+        y=[resultado["Pmax_W_cm2"] * 1e3],
+        mode="markers+text",
+        text=["MPP"],
+        textposition="top center",
+        marker=dict(color="#f6e05e", size=12, symbol="diamond"),
+        showlegend=False,
+    ), row=1, col=2)
+    fig_iv.update_xaxes(title_text="Voltaje V [V]", row=1, col=1)
+    fig_iv.update_xaxes(title_text="Voltaje V [V]", row=1, col=2)
+    fig_iv.update_yaxes(title_text="J [mA/cm²]", row=1, col=1)
+    fig_iv.update_yaxes(title_text="P [mW/cm²]", row=1, col=2)
     fig_iv.update_layout(
+        height=440,
         template="plotly_dark",
-        height=500,
-        xaxis=dict(domain=[0, 0.46], title="Voltaje V [V]"),
-        yaxis=dict(title="Densidad de corriente J [mA/cm²]", range=[0, max(J_arr.max(), 1e-9) * 1.08]),
-        xaxis2=dict(domain=[0.54, 1.0], title="Voltaje V [V]"),
-        yaxis2=dict(title="Potencia P [mW/cm²]", range=[0, max(P_arr.max(), 1e-9) * 1.15]),
-        updatemenus=[dict(type="buttons", showactive=False, y=1.12, x=0.0, buttons=[dict(label="▶ Reproducir barrido de V", method="animate", args=[None, dict(frame=dict(duration=40, redraw=True), fromcurrent=True)])])],
-        showlegend=True,
+        showlegend=False,
+        margin=dict(l=30, r=30, t=55, b=30),
     )
     st.plotly_chart(fig_iv, width="stretch")
 
     # ============================================================
-    # 4. PARÁMETROS ELÉCTRICOS Y PÉRDIDAS
+    # 4. PARÁMETROS ELÉCTRICOS
     # ============================================================
     st.markdown("### 4. Parámetros eléctricos y pérdidas")
     FF0 = f.FF0_empirico(resultado["Voc_V"], T_K)
@@ -2007,63 +2329,114 @@ with tab3:
     r4.metric("Rs total", f"{Rs_total:.4f} Ω·cm²")
 
     # ============================================================
-    # 5. BALANCE DE CORRIENTES
+    # 5. ESQUEMA Y MAGNITUDES DEL CIRCUITO
     # ============================================================
-    st.markdown("### 5. Balance de corrientes en el punto de operación")
-    st.caption(
-        "El diagrama muestra cómo se reparte la corriente fotogenerada entre "
-        "corriente útil, corriente de diodo y fuga por Rp."
-    )
+    st.markdown("### 5. Circuito equivalente y corrientes en el punto de operación")
 
-    V_max_exp = max(float(resultado["Voc_V"]) * 1.15, 0.05)
+    V_max_exp = max(float(resultado["Voc_V"]), 0.05)
+    V_inicial = min(0.6 * V_max_exp, V_max_exp)
+    if st.session_state.get("tab3_v_operacion", 0.0) > V_max_exp:
+        st.session_state["tab3_v_operacion"] = V_max_exp
+
     V_op = st.slider(
         "Voltaje de operación V [V]",
         0.0,
         V_max_exp,
-        min(float(resultado["Voc_V"]) * 0.6, V_max_exp),
+        V_inicial,
         0.005,
         key="tab3_v_operacion",
     )
 
     Vt_local = c.K_B_EVK * T_K
     J_foto_mA = max(JL_con_sombra, 0.0) * 1e3
-    J_diodo_mA = max(J0_A_cm2 * (np.exp(np.clip(V_op / (S["n_ideal"] * Vt_local), -700.0, 700.0)) - 1.0) * 1e3, 0.0)
-    J_shunt_mA = max(V_op / max(S["Rp"], 1e-12), 0.0) * 1e3
-    J_util_mA = max(J_foto_mA - J_diodo_mA - J_shunt_mA, 0.0)
-
-    fig_flujo = go.Figure(go.Sankey(
-        arrangement="fixed",
-        node=dict(
-            pad=28,
-            thickness=22,
-            line=dict(color="#cbd5e0", width=0.5),
-            label=["Fotocorriente generada", "Corriente útil externa", "Diodo", "Rp: fuga"],
-            color=["#68d391", "#63b3ed", "#fc8181", "#f6ad55"],
-            x=[0.02, 0.78, 0.78, 0.78],
-            y=[0.50, 0.20, 0.50, 0.80],
-        ),
-        link=dict(
-            source=[0, 0, 0],
-            target=[1, 2, 3],
-            value=np.maximum([J_util_mA, J_diodo_mA, J_shunt_mA], 0.0).tolist(),
-            color=["rgba(99,179,237,0.65)", "rgba(252,129,129,0.65)", "rgba(246,173,85,0.65)"],
-            hovertemplate="%{value:.3f} mA/cm²<extra></extra>",
-        ),
+    J_curva_op_mA = float(np.interp(
+        V_op,
+        resultado["V_array_V"],
+        resultado["J_array_A_cm2"] * 1e3,
     ))
-    fig_flujo.update_layout(height=360, template="plotly_dark", margin=dict(l=10, r=10, t=20, b=20))
-    st.plotly_chart(fig_flujo, width="stretch")
+    J_curva_op_A = J_curva_op_mA * 1e-3
+    V_diodo_op = V_op - Rs_total * J_curva_op_A
+
+    J_diodo_mA = max(
+        J0_tab3 * (
+            np.exp(
+                np.clip(
+                    V_diodo_op / (S["n_ideal"] * Vt_local),
+                    -700.0,
+                    700.0,
+                )
+            ) - 1.0
+        ) * 1e3,
+        0.0,
+    )
+    J_shunt_mA = max(V_diodo_op / max(S["Rp"], 1e-12), 0.0) * 1e3
+    J_externa_mA = J_foto_mA - J_diodo_mA - J_shunt_mA
+
+    esquema, barras = st.columns([1.15, 1.0])
+
+    with esquema:
+        st.markdown("**Modelo equivalente**")
+        svg = f"""
+<div style='background:#0b0e14;border-radius:10px;padding:12px'>
+<svg viewBox='0 0 620 300' preserveAspectRatio='xMidYMid meet'
+style='width:100%;height:auto;display:block'>
+<line x1='75' y1='65' x2='545' y2='65' stroke='#e2e8f0' stroke-width='3'/>
+<line x1='75' y1='235' x2='545' y2='235' stroke='#e2e8f0' stroke-width='3'/>
+<line x1='145' y1='235' x2='145' y2='65' stroke='#68d391' stroke-width='5'/>
+<circle cx='145' cy='150' r='31' fill='#161b22' stroke='#68d391' stroke-width='3'/>
+<line x1='145' y1='119' x2='145' y2='181' stroke='#68d391' stroke-width='3'/>
+<polygon points='145,104 134,123 156,123' fill='#68d391'/>
+<text x='90' y='275' fill='#68d391' font-size='15'>JL = {J_foto_mA:.2f} mA/cm²</text>
+<line x1='300' y1='65' x2='300' y2='235' stroke='#fc8181' stroke-width='4'/>
+<polygon points='300,120 286,150 314,150' fill='#fc8181'/>
+<text x='270' y='275' fill='#fc8181' font-size='15'>Diodo</text>
+<line x1='425' y1='65' x2='425' y2='235' stroke='#f6ad55' stroke-width='4'/>
+<rect x='407' y='128' width='36' height='44' fill='#161b22' stroke='#f6ad55' stroke-width='3'/>
+<text x='400' y='275' fill='#f6ad55' font-size='15'>Rp</text>
+<rect x='500' y='48' width='48' height='34' fill='#161b22' stroke='#63b3ed' stroke-width='3'/>
+<text x='500' y='35' fill='#63b3ed' font-size='15'>Rs</text>
+<text x='35' y='58' fill='#a0aec0' font-size='18'>−</text>
+<text x='558' y='58' fill='#a0aec0' font-size='18'>+</text>
+<text x='35' y='258' fill='#a0aec0' font-size='12'>Terminal negativo</text>
+<text x='465' y='258' fill='#a0aec0' font-size='12'>Terminal positivo</text>
+</svg>
+</div>
+"""
+        st.components.v1.html(svg, height=390, scrolling=False)
+
+    with barras:
+        etiquetas = ["JL", "J externa", "J diodo", "J Rp"]
+        valores = [J_foto_mA, J_externa_mA, J_diodo_mA, J_shunt_mA]
+        colores = ["#68d391", "#63b3ed", "#fc8181", "#f6ad55"]
+        fig_bar = go.Figure(go.Bar(
+            x=etiquetas,
+            y=valores,
+            marker_color=colores,
+            text=[f"{v:.3f}" for v in valores],
+            textposition="outside",
+            hovertemplate="%{x}: %{y:.3f} mA/cm²<extra></extra>",
+        ))
+        fig_bar.update_layout(
+            title=f"Magnitudes a V={V_op:.3f} V",
+            xaxis_title="Componente",
+            yaxis_title="Densidad de corriente [mA/cm²]",
+            height=320,
+            template="plotly_dark",
+            showlegend=False,
+            margin=dict(l=20, r=20, t=55, b=45),
+        )
+        st.plotly_chart(fig_bar, width="stretch")
 
     sm1, sm2, sm3, sm4 = st.columns(4)
-    sm1.metric("J fotogenerada", f"{J_foto_mA:.3f} mA/cm²")
-    sm2.metric("J útil", f"{J_util_mA:.3f} mA/cm²")
+    sm1.metric("JL", f"{J_foto_mA:.3f} mA/cm²")
+    sm2.metric("J externa", f"{J_externa_mA:.3f} mA/cm²")
     sm3.metric("J diodo", f"{J_diodo_mA:.3f} mA/cm²")
-    sm4.metric("J fuga Rp", f"{J_shunt_mA:.3f} mA/cm²")
+    sm4.metric("J Rp", f"{J_shunt_mA:.3f} mA/cm²")
 
     # ============================================================
     # 6. MALLA FRONTAL
     # ============================================================
     st.markdown("### 6. Malla frontal: sombra versus resistencia serie")
-    st.caption("Más dedos reducen Rs pero aumentan la sombra; menos dedos producen el efecto contrario.")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -2074,8 +2447,19 @@ with tab3:
         fss = Ns * S["ancho_dedo_um"] * 1e-4 / c.ANCHO_CELDA_CM
         Rss = c.RS_REF_DEDOS_OHM_CM2 * c.NUMERO_DEDOS_REFERENCIA / Ns
         figN = go.Figure()
-        figN.add_trace(go.Scatter(x=Ns, y=fss * 100, name="Sombra [%]", line=dict(color="#f6ad55", width=3)))
-        figN.add_trace(go.Scatter(x=Ns, y=Rss, name="Rs malla [Ω·cm²]", yaxis="y2", line=dict(color="#63b3ed", width=3)))
+        figN.add_trace(go.Scatter(
+            x=Ns,
+            y=fss * 100,
+            name="Sombra [%]",
+            line=dict(color="#f6ad55", width=3),
+        ))
+        figN.add_trace(go.Scatter(
+            x=Ns,
+            y=Rss,
+            name="Rs malla [Ω·cm²]",
+            yaxis="y2",
+            line=dict(color="#63b3ed", width=3),
+        ))
         figN.add_vline(x=S["num_dedos"], line_dash="dot", line_color="white")
         figN.update_layout(
             xaxis_title="Número de dedos",
@@ -2094,33 +2478,42 @@ with tab4:
     st.subheader("Defectos localizados y respuesta global")
 
     st.caption(
-        "La celda se representa mediante una grilla física 8×8 de sectores. "
-        "La contaminación modifica localmente la vida media τₙ y, por "
-        "lo tanto, la IQE y la corriente fotogenerada. La superficie 3D "
-        "usa una malla visual interpolada 64×64 únicamente para mejorar "
-        "la calidad gráfica. Un dedo de plata interrumpido se modela como "
-        "un defecto resistivo: aumenta Rs, pero no modifica la IQE local ni JL."
+        "La celda se divide en una grilla física 32×32. La contaminación "
+        "reduce localmente τₙ y la probabilidad de colección. El dedo de "
+        "plata interrumpido se modela por separado como un aumento de Rₛ. "
+        "La superficie 3D se interpola únicamente para mejorar la lectura visual."
     )
 
-    n_sec = 8
+    # ============================================================
+    # CONFIGURACIÓN DE LA GRILLA
+    # ============================================================
+    n_sec = 32
+    n_visual = 64
+
+    filas_sector = np.arange(n_sec, dtype=float)
+    columnas_sector = np.arange(n_sec, dtype=float)
+    X_sector, Y_sector = np.meshgrid(columnas_sector, filas_sector)
 
     # ============================================================
     # ESTADO LOCAL DE LA PESTAÑA
     # ============================================================
     st.session_state.setdefault("tab4_tipo_falla", "Mancha circular")
     st.session_state.setdefault("tab4_severidad", "Moderada")
-    st.session_state.setdefault("tab4_fila_centro", 3.5)
-    st.session_state.setdefault("tab4_columna_centro", 3.5)
-    st.session_state.setdefault("tab4_radio_falla", 1.5)
+    st.session_state.setdefault("tab4_fila_centro", 15.5)
+    st.session_state.setdefault("tab4_columna_centro", 15.5)
+    st.session_state.setdefault("tab4_radio_falla", 4.0)
     st.session_state.setdefault("tab4_relacion_elipse", 2.0)
     st.session_state.setdefault("tab4_severidad_dedo", "Moderada")
+    st.session_state.setdefault("tab4_columna_dedo", 15)
 
     # ============================================================
     # CONTROLES
     # ============================================================
-    c1, c2 = st.columns(2)
+    st.markdown("### Definición de los defectos")
 
-    with c1:
+    control_izq, control_der = st.columns(2)
+
+    with control_izq:
         st.markdown("**Contaminación metálica**")
 
         S["defecto_activo"] = st.checkbox(
@@ -2130,7 +2523,7 @@ with tab4:
 
         tipo_falla = st.selectbox(
             "Forma de la falla",
-            [
+            options=[
                 "Mancha circular",
                 "Mancha elíptica",
                 "Grieta diagonal",
@@ -2146,39 +2539,45 @@ with tab4:
         )
 
         fila_centro = st.slider(
-            "Fila del centro de la falla",
-            0.0,
-            7.0,
+            "Fila del centro [sector]",
+            min_value=0.0,
+            max_value=float(n_sec - 1),
             step=0.5,
             key="tab4_fila_centro",
         )
 
         columna_centro = st.slider(
-            "Columna del centro de la falla",
-            0.0,
-            7.0,
+            "Columna del centro [sector]",
+            min_value=0.0,
+            max_value=float(n_sec - 1),
             step=0.5,
             key="tab4_columna_centro",
         )
 
         radio_falla = st.slider(
-            "Tamaño de la falla [sectores]",
-            0.5,
-            4.0,
+            "Radio característico [sectores]",
+            min_value=0.5,
+            max_value=12.0,
             step=0.5,
             key="tab4_radio_falla",
         )
 
         relacion_elipse = st.slider(
             "Relación de aspecto de la elipse",
-            1.0,
-            4.0,
-            step=0.5,
-            key="tab4_relacion_elipse",
+            min_value=1.0,
+            max_value=4.0,
+            step=0.1,
             disabled=tipo_falla != "Mancha elíptica",
+            key="tab4_relacion_elipse",
         )
 
-    with c2:
+        if tipo_falla == "Gradiente radial":
+            st.caption(
+                "La severidad es máxima cerca del centro y decrece linealmente "
+                "hasta cero al alcanzar el radio definido."
+            )
+
+    with control_der:
         st.markdown("**Dedo de plata interrumpido**")
 
         activar_dedo = st.checkbox(
@@ -2187,14 +2586,20 @@ with tab4:
         )
 
         if activar_dedo:
-            S["dedo_roto_col"] = st.slider(
-                "Columna del dedo roto",
-                0,
-                n_sec - 1,
-                S["dedo_roto_col"]
-                if S["dedo_roto_col"] is not None
-                else 3,
+            columna_dedo = st.slider(
+                "Columna del dedo roto [sector]",
+                min_value=0,
+                max_value=n_sec - 1,
+                value=int(
+                    st.session_state.get(
+                        "tab4_columna_dedo",
+                        n_sec // 2,
+                    )
+                ),
+                key="tab4_columna_dedo",
             )
+
+            S["dedo_roto_col"] = int(columna_dedo)
 
             severidad_dedo = st.select_slider(
                 "Severidad resistiva",
@@ -2206,27 +2611,24 @@ with tab4:
             severidad_dedo = "Leve"
 
         st.caption(
-            "El dedo roto modifica Rs y la curva J–V, pero no la IQE local."
+            "El dedo roto aumenta Rₛ y afecta principalmente FF y Pmax. "
+            "No modifica la IQE local ni Jᴸ."
         )
 
     wl_defecto = st.slider(
         "λ para visualizar el defecto [nm]",
-        300.0,
-        1200.0,
-        900.0,
-        10.0,
+        min_value=300.0,
+        max_value=1200.0,
+        value=900.0,
+        step=10.0,
         key="tab4_lambda_defecto",
     )
 
     # ============================================================
-    # MATRIZ CONTINUA DE SEVERIDAD
+    # MAPA CONTINUO DE SEVERIDAD
     # ============================================================
-    filas = np.arange(n_sec, dtype=float)
-    cols = np.arange(n_sec, dtype=float)
-    X, Y = np.meshgrid(cols, filas)
-
-    dx = X - columna_centro
-    dy = Y - fila_centro
+    dx = X_sector - columna_centro
+    dy = Y_sector - fila_centro
     sigma = max(radio_falla, 0.25)
 
     if tipo_falla == "Mancha elíptica":
@@ -2241,6 +2643,7 @@ with tab4:
 
     elif tipo_falla == "Grieta diagonal":
         distancia = np.abs(dx - dy) / np.sqrt(2.0)
+        coordenada_grieta = (dx + dy) / np.sqrt(2.0)
         severidad_map = np.exp(
             -0.5 * (
                 distancia / max(sigma / 3.0, 0.15)
@@ -2248,7 +2651,7 @@ with tab4:
         )
         severidad_map *= np.exp(
             -0.5 * (
-                (dx + dy) / max(2.0 * sigma, 0.5)
+                coordenada_grieta / max(2.0 * sigma, 0.5)
             ) ** 2
         )
 
@@ -2268,12 +2671,14 @@ with tab4:
 
     severidad_map = np.clip(severidad_map, 0.0, 1.0)
 
+    # ============================================================
+    # TIEMPO DE VIDA LOCAL
+    # ============================================================
     factores_severidad = {
         "Leve": 0.50,
         "Moderada": 0.10,
         "Severa": 0.01,
     }
-
     factor_tau = factores_severidad[severidad]
 
     tau_n_sano = np.full(
@@ -2295,33 +2700,34 @@ with tab4:
         )
 
     # ============================================================
-    # LONGITUD DE ONDA Y MAPAS IQE
+    # IQE LOCAL POR SECTOR
     # ============================================================
     i_w = int(np.argmin(np.abs(wl_grid - wl_defecto)))
     wl_real = float(wl_grid[i_w])
     alpha_real = float(alpha_grid[i_w])
     R_real = float(R_grid[i_w])
 
-    def mapa_iqe_local(tau_n_grid):
-        mapa = np.zeros((n_sec, n_sec), dtype=float)
+    sf_local_grid = np.full(
+        (n_sec, n_sec),
+        S["Sf"],
+        dtype=float,
+    )
 
-        Lp_local = (
-            f.longitud_difusion(
-                Dp,
-                S["tau_p_us"],
-            )
-            * 1e4
-        )
+    def calcular_mapa_iqe(tau_n_grid):
+        """Calcula IQE local con la misma ecuación de las Pestañas 2 y 3."""
+        mapa_iqe = np.zeros((n_sec, n_sec), dtype=float)
+
+        Lp_local_um = f.longitud_difusion(
+            Dp,
+            S["tau_p_us"],
+        ) * 1e4
 
         for i in range(n_sec):
             for j in range(n_sec):
-                Ln_local = (
-                    f.longitud_difusion(
-                        Dn,
-                        tau_n_grid[i, j],
-                    )
-                    * 1e4
-                )
+                Ln_local_um = f.longitud_difusion(
+                    Dn,
+                    tau_n_grid[i, j],
+                ) * 1e4
 
                 _, iqe_local = f.calcular_EQE_IQE_preciso(
                     np.array([wl_real]),
@@ -2331,33 +2737,33 @@ with tab4:
                     xn_um,
                     xp_um,
                     W_total_um,
-                    Lp_local,
-                    Ln_local,
+                    Lp_local_um,
+                    Ln_local_um,
                     Dp,
                     Dn,
-                    S["Sf"],
+                    sf_local_grid[i, j],
                     S["Sr"],
                     reflector_trasero_activo=S["reflector_trasero"],
                     R_aluminio=c.R_ALUMINIO_EFECTIVA,
                 )
 
-                mapa[i, j] = float(iqe_local[0])
+                mapa_iqe[i, j] = float(iqe_local[0])
 
-        return mapa
+        return mapa_iqe
 
-    mapa_sano = mapa_iqe_local(tau_n_sano)
-    mapa_con_defecto = (
-        mapa_iqe_local(tau_n_defecto)
+    mapa_iqe_sano = calcular_mapa_iqe(tau_n_sano)
+    mapa_iqe_defecto = (
+        calcular_mapa_iqe(tau_n_defecto)
         if S["defecto_activo"]
-        else mapa_sano.copy()
+        else mapa_iqe_sano.copy()
     )
 
     # ============================================================
-    # HEATMAPS 2D SIN INTERACCIÓN POR CLIC
+    # HEATMAPS IQE
     # ============================================================
-    def heatmap_iqe(mapa, titulo):
-        fig_mapa = go.Figure(
-            data=go.Heatmap(
+    def construir_heatmap_iqe(mapa, titulo):
+        fig = go.Figure(
+            go.Heatmap(
                 z=mapa,
                 x=np.arange(1, n_sec + 1),
                 y=np.arange(1, n_sec + 1),
@@ -2368,40 +2774,40 @@ with tab4:
                 hovertemplate=(
                     "Columna: %{x}<br>"
                     "Fila: %{y}<br>"
-                    "IQE: %{z:.3f}<extra></extra>"
+                    "IQE local: %{z:.3f}<extra></extra>"
                 ),
             )
         )
 
-        fig_mapa.update_layout(
+        fig.update_layout(
             title=titulo,
             xaxis_title="Columna del sector",
             yaxis_title="Fila del sector",
             xaxis=dict(
                 tickmode="linear",
-                dtick=1,
+                dtick=4,
                 fixedrange=True,
             ),
             yaxis=dict(
                 tickmode="linear",
-                dtick=1,
+                dtick=4,
                 fixedrange=True,
                 autorange="reversed",
             ),
-            height=400,
+            height=440,
             template="plotly_dark",
         )
 
-        return fig_mapa
+        return fig
 
     st.markdown(f"### IQE local a λ={wl_real:.0f} nm")
 
-    c3, c4 = st.columns(2)
+    mapa_izq, mapa_der = st.columns(2)
 
-    with c3:
+    with mapa_izq:
         st.plotly_chart(
-            heatmap_iqe(
-                mapa_sano,
+            construir_heatmap_iqe(
+                mapa_iqe_sano,
                 "IQE local — celda sana",
             ),
             config={
@@ -2411,10 +2817,10 @@ with tab4:
             width="stretch",
         )
 
-    with c4:
+    with mapa_der:
         st.plotly_chart(
-            heatmap_iqe(
-                mapa_con_defecto,
+            construir_heatmap_iqe(
+                mapa_iqe_defecto,
                 "IQE local — celda con defecto",
             ),
             config={
@@ -2424,22 +2830,129 @@ with tab4:
             width="stretch",
         )
 
+    # ============================================================
+    # PENALIZACIÓN RESISTIVA LOCALIZADA
+    # ============================================================
+    factores_dedo = {
+        "Leve": 0.5,
+        "Moderada": 1.0,
+        "Severa": 2.0,
+    }
+
+    penalizacion_dedo = (
+        factores_dedo[severidad_dedo]
+        if S["dedo_roto_col"] is not None
+        else 0.0
+    )
+
+    mapa_resistivo = np.zeros(
+        (n_sec, n_sec),
+        dtype=float,
+    )
+
+    if S["dedo_roto_col"] is not None:
+        mapa_resistivo[:, S["dedo_roto_col"]] = (
+            penalizacion_dedo / factores_dedo["Severa"]
+        )
+
+    def construir_heatmap_resistivo():
+        fig = go.Figure(
+            go.Heatmap(
+                z=mapa_resistivo,
+                x=np.arange(1, n_sec + 1),
+                y=np.arange(1, n_sec + 1),
+                zmin=0.0,
+                zmax=1.0,
+                colorscale="Hot",
+                colorbar=dict(title="Penalización relativa"),
+                hovertemplate=(
+                    "Columna: %{x}<br>"
+                    "Fila: %{y}<br>"
+                    "Penalización: %{z:.3f}<extra></extra>"
+                ),
+            )
+        )
+
+        fig.update_layout(
+            title="Localización de la penalización resistiva",
+            xaxis_title="Columna del sector",
+            yaxis_title="Fila del sector",
+            xaxis=dict(
+                tickmode="linear",
+                dtick=4,
+                fixedrange=True,
+            ),
+            yaxis=dict(
+                tickmode="linear",
+                dtick=4,
+                fixedrange=True,
+                autorange="reversed",
+            ),
+            height=440,
+            template="plotly_dark",
+        )
+
+        return fig
+
+    st.markdown("### Diagnóstico resistivo")
     st.caption(
-        "La posición de la falla se modifica mediante los sliders de fila "
-        "y columna. El mapa 2D es una representación informativa de la IQE."
+        "La banda vertical identifica los sectores asociados al dedo roto. "
+        "La escala es relativa: no representa una temperatura ni una potencia "
+        "local absoluta."
+    )
+
+    st.plotly_chart(
+        construir_heatmap_resistivo(),
+        config={
+            "displayModeBar": False,
+            "scrollZoom": False,
+        },
+        width="stretch",
     )
 
     # ============================================================
-    # MONTAÑAS 3D CON MALLA VISUAL 64×64
+    # MÉTRICAS ESPACIALES
     # ============================================================
-    def interpolar_matriz_visual(matriz_8x8, resolucion_visual=64):
-        """Interpolación bilineal/cúbica visual sin cambiar la física."""
+    area_afectada = float(
+        np.mean(severidad_map > 0.1) * 100.0
+    )
+    iqe_media_sana = float(np.mean(mapa_iqe_sano))
+    iqe_media_defecto = float(np.mean(mapa_iqe_defecto))
+    reduccion_iqe_media = (
+        100.0 * (1.0 - iqe_media_defecto / iqe_media_sana)
+        if iqe_media_sana > 0.0
+        else 0.0
+    )
+
+    st.markdown("### Indicadores espaciales")
+    met1, met2, met3, met4 = st.columns(4)
+
+    met1.metric(
+        "Área con severidad > 0.1",
+        f"{area_afectada:.1f} %",
+    )
+    met2.metric(
+        "IQE media sana",
+        f"{iqe_media_sana:.3f}",
+    )
+    met3.metric(
+        "IQE media afectada",
+        f"{iqe_media_defecto:.3f}",
+    )
+    met4.metric(
+        "Reducción media de IQE",
+        f"{reduccion_iqe_media:.1f} %",
+    )
+
+    # ============================================================
+    # SUPERFICIE 3D ÚNICA
+    # ============================================================
+    def interpolar_matriz_visual(matriz, resolucion_visual):
         x_original = np.linspace(0.0, 1.0, n_sec)
         y_original = np.linspace(0.0, 1.0, n_sec)
         x_visual = np.linspace(0.0, 1.0, resolucion_visual)
         y_visual = np.linspace(0.0, 1.0, resolucion_visual)
-
-        matriz = np.asarray(matriz_8x8, dtype=float)
+        matriz = np.asarray(matriz, dtype=float)
 
         try:
             from scipy.interpolate import RectBivariateSpline
@@ -2456,203 +2969,147 @@ with tab4:
                 x_visual,
             )
         except ImportError:
-            matriz_x = np.array(
-                [
-                    np.interp(
-                        x_visual,
-                        x_original,
-                        fila,
-                    )
-                    for fila in matriz
-                ]
-            )
-            matriz_visual = np.array(
-                [
-                    np.interp(
-                        y_visual,
-                        y_original,
-                        matriz_x[:, j],
-                    )
-                    for j in range(resolucion_visual)
-                ]
-            ).T
+            matriz_x = np.array([
+                np.interp(
+                    x_visual,
+                    x_original,
+                    fila,
+                )
+                for fila in matriz
+            ])
+            matriz_visual = np.array([
+                np.interp(
+                    y_visual,
+                    y_original,
+                    matriz_x[:, j],
+                )
+                for j in range(resolucion_visual)
+            ]).T
 
         return np.clip(matriz_visual, 0.0, 1.0)
 
-    def superficie_montana(
-        defecto_map,
-        titulo,
-        max_altura=0.65,
-        resolucion_visual=64,
-    ):
-        if S["defecto_activo"]:
-            altura_8x8 = np.asarray(
-                defecto_map,
-                dtype=float,
-            )
-            altura_8x8 = np.clip(
-                altura_8x8,
-                0.0,
-                1.0,
-            )
-        else:
-            altura_8x8 = np.zeros(
-                (n_sec, n_sec),
-                dtype=float,
-            )
+    altura_fisica = (
+        severidad_map
+        if S["defecto_activo"]
+        else np.zeros((n_sec, n_sec), dtype=float)
+    )
 
-        altura_visual = interpolar_matriz_visual(
-            altura_8x8,
-            resolucion_visual=resolucion_visual,
-        )
+    altura_visual = interpolar_matriz_visual(
+        altura_fisica,
+        n_visual,
+    ) * 0.65
 
-        altura_visual *= max_altura
+    eje_visual = np.linspace(
+        1.0,
+        float(n_sec),
+        n_visual,
+    )
+    X_visual, Y_visual = np.meshgrid(
+        eje_visual,
+        eje_visual,
+    )
 
-        eje_visual = np.linspace(
-            1.0,
-            float(n_sec),
-            resolucion_visual,
-        )
-
-        X_visual, Y_visual = np.meshgrid(
-            eje_visual,
-            eje_visual,
-        )
-
-        fig_3d = go.Figure(
-            data=[
-                go.Surface(
-                    x=X_visual,
-                    y=Y_visual,
-                    z=altura_visual,
-                    colorscale=[
-                        [0.00, "#20242c"],
-                        [0.25, "#276749"],
-                        [0.55, "#d69e2e"],
-                        [0.80, "#ed8936"],
-                        [1.00, "#c53030"],
-                    ],
-                    cmin=0.0,
-                    cmax=max_altura,
-                    colorbar=dict(title="Altura visual"),
-                    hovertemplate=(
-                        "Columna: %{x:.1f}<br>"
-                        "Fila: %{y:.1f}<br>"
-                        "Altura: %{z:.3f}<extra></extra>"
-                    ),
-                    lighting=dict(
-                        ambient=0.75,
-                        diffuse=0.75,
-                        specular=0.20,
-                        roughness=0.75,
-                        fresnel=0.10,
-                    ),
-                    contours=dict(
-                        z=dict(show=False),
-                    ),
-                )
-            ]
-        )
-
-        fig_3d.update_layout(
-            title=titulo,
-            height=470,
-            template="plotly_dark",
-            margin=dict(l=0, r=0, t=45, b=0),
-            scene=dict(
-                xaxis_title="Columna",
-                yaxis_title="Fila",
-                zaxis_title="Intensidad visual",
-                xaxis=dict(
-                    range=[1.0, float(n_sec)],
-                    nticks=8,
-                ),
-                yaxis=dict(
-                    range=[1.0, float(n_sec)],
-                    nticks=8,
-                ),
-                zaxis=dict(
-                    range=[0.0, max_altura],
-                    nticks=5,
-                ),
-                aspectmode="manual",
-                aspectratio=dict(
-                    x=1.0,
-                    y=1.0,
-                    z=0.42,
-                ),
-                camera=dict(
-                    eye=dict(
-                        x=1.45,
-                        y=-1.45,
-                        z=1.05,
-                    )
-                ),
+    fig_3d = go.Figure(
+        go.Surface(
+            x=X_visual,
+            y=Y_visual,
+            z=altura_visual,
+            colorscale=[
+                [0.00, "#20242c"],
+                [0.25, "#276749"],
+                [0.55, "#d69e2e"],
+                [0.80, "#ed8936"],
+                [1.00, "#c53030"],
+            ],
+            cmin=0.0,
+            cmax=0.65,
+            colorbar=dict(title="Severidad visual"),
+            hovertemplate=(
+                "Columna: %{x:.1f}<br>"
+                "Fila: %{y:.1f}<br>"
+                "Altura visual: %{z:.3f}<extra></extra>"
+            ),
+            lighting=dict(
+                ambient=0.75,
+                diffuse=0.75,
+                specular=0.20,
+                roughness=0.75,
+                fresnel=0.10,
             ),
         )
+    )
 
-        return fig_3d
+    fig_3d.update_layout(
+        title="Relieve de la contaminación",
+        height=500,
+        template="plotly_dark",
+        margin=dict(l=0, r=0, t=45, b=0),
+        scene=dict(
+            xaxis_title="Columna del sector",
+            yaxis_title="Fila del sector",
+            zaxis_title="Severidad visual",
+            xaxis=dict(
+                range=[1.0, float(n_sec)],
+                nticks=8,
+            ),
+            yaxis=dict(
+                range=[1.0, float(n_sec)],
+                nticks=8,
+            ),
+            zaxis=dict(
+                range=[0.0, 0.65],
+                nticks=5,
+            ),
+            aspectmode="manual",
+            aspectratio=dict(
+                x=1.0,
+                y=1.0,
+                z=0.42,
+            ),
+            camera=dict(
+                eye=dict(
+                    x=1.45,
+                    y=-1.45,
+                    z=1.05,
+                )
+            ),
+        ),
+    )
 
     st.markdown("### Intensidad espacial del defecto")
     st.caption(
-        "La física se calcula en 8×8 sectores. La superficie se interpola "
-        "a 64×64 puntos y la altura se exagera moderadamente solo para hacer "
-        "visible la forma espacial."
+        "La elevación es una representación visual de la severidad. No es "
+        "una magnitud física adicional ni una altura geométrica de la celda."
     )
 
-    c5, c6 = st.columns(2)
-
-    with c5:
-        st.plotly_chart(
-            superficie_montana(
-                np.zeros((n_sec, n_sec)),
-                "Base de referencia — celda sana",
-                max_altura=0.65,
-                resolucion_visual=64,
-            ),
-            config={
-                "displayModeBar": False,
-                "scrollZoom": True,
-            },
-            width="stretch",
-        )
-
-    with c6:
-        st.plotly_chart(
-            superficie_montana(
-                severidad_map,
-                "Montaña de contaminación — celda afectada",
-                max_altura=0.65,
-                resolucion_visual=64,
-            ),
-            config={
-                "displayModeBar": False,
-                "scrollZoom": True,
-            },
-            width="stretch",
-        )
+    st.plotly_chart(
+        fig_3d,
+        config={
+            "displayModeBar": False,
+            "scrollZoom": True,
+        },
+        width="stretch",
+    )
 
     # ============================================================
-    # PROPAGACIÓN A J–V
+    # CORRIENTE FOTOGENERADA GLOBAL
     # ============================================================
-    def JL_global(tau_n_grid, Sf_grid_local=None):
-        if Sf_grid_local is None:
-            Sf_grid_local = np.full(
-                (n_sec, n_sec),
-                S["Sf"],
-            )
+    st.markdown("### Promedio sectorial de la colección")
 
+    def calcular_JL_global(tau_n_grid, sf_grid):
+        """Promedia JL calculado sector por sector sobre la grilla física."""
         JL_sum = 0.0
+        Lp_global_um = f.longitud_difusion(
+            Dp,
+            S["tau_p_us"],
+        ) * 1e4
 
         for i in range(n_sec):
             for j in range(n_sec):
-                Ln_local = (
-                    f.longitud_difusion(
-                        Dn,
-                        tau_n_grid[i, j],
-                    )
-                    * 1e4
-                )
+                Ln_local_um = f.longitud_difusion(
+                    Dn,
+                    tau_n_grid[i, j],
+                ) * 1e4
 
                 eqe_local, _ = f.calcular_EQE_IQE_preciso(
                     wl_grid,
@@ -2662,11 +3119,11 @@ with tab4:
                     xn_um,
                     xp_um,
                     W_total_um,
-                    Lp_um,
-                    Ln_local,
+                    Lp_global_um,
+                    Ln_local_um,
                     Dp,
                     Dn,
-                    Sf_grid_local[i, j],
+                    sf_grid[i, j],
                     S["Sr"],
                     reflector_trasero_activo=S["reflector_trasero"],
                     R_aluminio=c.R_ALUMINIO_EFECTIVA,
@@ -2677,29 +3134,30 @@ with tab4:
                     wl_grid,
                 )
 
-        return JL_sum / (n_sec * n_sec)
+        return JL_sum / float(n_sec * n_sec)
 
-    Sf_grid_sano = np.full(
+    sf_grid_sano = np.full(
         (n_sec, n_sec),
         S["Sf"],
+        dtype=float,
     )
 
-    JL_sano = JL_global(
+    JL_sano = calcular_JL_global(
         tau_n_sano,
-        Sf_grid_sano,
+        sf_grid_sano,
     )
 
     JL_defecto = (
-        JL_global(
+        calcular_JL_global(
             tau_n_defecto,
-            Sf_grid_sano,
+            sf_grid_sano,
         )
         if S["defecto_activo"]
         else JL_sano
     )
 
     # ============================================================
-    # DEDO ROTO: SOLO RESISTENCIA SERIE
+    # RESISTENCIA SERIE DEL DEDO ROTO
     # ============================================================
     malla_sana = f.modelo_malla_frontal_plata(
         S["num_dedos"],
@@ -2709,21 +3167,10 @@ with tab4:
     Rs_sano = (
         c.RS_BASE_OHM_CM2
         + malla_sana["Rs_malla_ohm_cm2"]
+        + S["Rs_extra"]
     )
 
-    factores_dedo = {
-        "Leve": 0.5,
-        "Moderada": 1.0,
-        "Severa": 2.0,
-    }
-
-    penalizacion_dedo = (
-        factores_dedo[severidad_dedo]
-        if S["dedo_roto_col"] is not None
-        else 0.0
-    )
-
-    Rs_con_dedo_roto = Rs_sano + penalizacion_dedo * (
+    Rs_defecto = Rs_sano + penalizacion_dedo * (
         c.RS_REF_DEDOS_OHM_CM2
         * c.NUMERO_DEDOS_REFERENCIA
         / S["num_dedos"]
@@ -2732,7 +3179,7 @@ with tab4:
     # ============================================================
     # CURVAS J–V
     # ============================================================
-    res_sano = f.simular_celda_JV(
+    resultado_sano = f.simular_celda_JV(
         malla_sana["fraccion_iluminada"] * JL_sano,
         J0_A_cm2,
         T_K,
@@ -2743,57 +3190,62 @@ with tab4:
         n_puntos=250,
     )
 
-    res_defecto = f.simular_celda_JV(
+    resultado_defecto = f.simular_celda_JV(
         malla_sana["fraccion_iluminada"] * JL_defecto,
         J0_A_cm2,
         T_K,
         S["irradiancia_soles"],
         S["n_ideal"],
-        Rs_con_dedo_roto,
+        Rs_defecto,
         S["Rp"],
         n_puntos=250,
     )
 
+    V_sano, J_sano = truncar_cerca_voc(
+        resultado_sano["V_array_V"],
+        resultado_sano["J_array_A_cm2"] * 1e3,
+    )
+    V_defecto, J_defecto = truncar_cerca_voc(
+        resultado_defecto["V_array_V"],
+        resultado_defecto["J_array_A_cm2"] * 1e3,
+    )
+
     fig_jv = go.Figure()
 
-    Vs, Js = truncar_cerca_voc(
-        res_sano["V_array_V"],
-        res_sano["J_array_A_cm2"] * 1e3,
-    )
+    fig_jv.add_trace(go.Scatter(
+        x=V_sano,
+        y=J_sano,
+        name="Celda sana",
+        line=dict(
+            color="#68d391",
+            width=3,
+        ),
+    ))
 
-    Vd, Jd = truncar_cerca_voc(
-        res_defecto["V_array_V"],
-        res_defecto["J_array_A_cm2"] * 1e3,
-    )
-
-    fig_jv.add_trace(
-        go.Scatter(
-            x=Vs,
-            y=Js,
-            name="Celda sana",
-            line=dict(color="#68d391", width=3),
-        )
-    )
-
-    fig_jv.add_trace(
-        go.Scatter(
-            x=Vd,
-            y=Jd,
-            name="Con defecto(s)",
-            line=dict(color="#fc8181", width=3, dash="dash"),
-        )
-    )
+    fig_jv.add_trace(go.Scatter(
+        x=V_defecto,
+        y=J_defecto,
+        name="Con defecto(s)",
+        line=dict(
+            color="#fc8181",
+            width=3,
+            dash="dash",
+        ),
+    ))
 
     fig_jv.update_layout(
         title="Propagación del defecto a la curva J–V",
-        xaxis_title="V [V]",
-        yaxis_title="J [mA/cm²]",
-        height=400,
+        xaxis_title="Voltaje V [V]",
+        yaxis_title="Densidad de corriente J [mA/cm²]",
+        height=420,
         template="plotly_dark",
         xaxis=dict(fixedrange=True),
         yaxis=dict(
             fixedrange=True,
-            range=[0.0, max(Js.max(), Jd.max()) * 1.08],
+            range=[
+                0.0,
+                max(J_sano.max(), J_defecto.max()) * 1.08,
+            ],
         ),
     )
 
@@ -2807,55 +3259,60 @@ with tab4:
     )
 
     # ============================================================
-    # MÉTRICAS
+    # MÉTRICAS GLOBALES
     # ============================================================
-    m1, m2, m3, m4 = st.columns(4)
+    metricas = st.columns(6)
 
-    m1.metric(
-        "Jsc sana",
-        f"{res_sano['Jsc_A_cm2'] * 1e3:.2f} mA/cm²",
+    metricas[0].metric(
+        "JL sana",
+        f"{JL_sano * 1e3:.2f} mA/cm²",
     )
-
-    m2.metric(
+    metricas[1].metric(
+        "JL afectada",
+        f"{JL_defecto * 1e3:.2f} mA/cm²",
+    )
+    metricas[2].metric(
         "Δ Jsc",
-        f"{(
-            res_defecto['Jsc_A_cm2']
-            - res_sano['Jsc_A_cm2']
-        ) * 1e3:+.3f} mA/cm²",
+        f"{(resultado_defecto['Jsc_A_cm2'] - resultado_sano['Jsc_A_cm2']) * 1e3:+.3f} mA/cm²",
     )
-
-    m3.metric(
+    metricas[3].metric(
         "Δ FF",
-        f"{(
-            res_defecto['FF']
-            - res_sano['FF']
-        ) * 100:+.2f} pp",
+        f"{(resultado_defecto['FF'] - resultado_sano['FF']) * 100:+.2f} pp",
     )
-
-    m4.metric(
+    metricas[4].metric(
         "Δ Pmax",
-        f"{(
-            res_defecto['Pmax_W_cm2']
-            - res_sano['Pmax_W_cm2']
-        ) * 1e3:+.3f} mW/cm²",
+        f"{(resultado_defecto['Pmax_W_cm2'] - resultado_sano['Pmax_W_cm2']) * 1e3:+.3f} mW/cm²",
+    )
+    metricas[5].metric(
+        "Rs con defecto",
+        f"{Rs_defecto:.4f} Ω·cm²",
     )
 
-    if S["defecto_activo"]:
-        st.caption(
-            "La contaminación se representa como una distribución continua "
-            "de τₙ reducido. En la visualización 3D, la severidad se "
-            "interpola a una malla 64×64 y se exagera moderadamente solo "
-            "para hacer visible la forma espacial."
+    # ============================================================
+    # LECTURA FÍSICA AUTOMÁTICA
+    # ============================================================
+    if S["defecto_activo"] and S["dedo_roto_col"] is not None:
+        st.info(
+            "Lectura física: la contaminación reduce τₙ, Lₙ, IQE, JL y Jsc. "
+            "El dedo roto agrega una penalización de resistencia serie que "
+            "afecta principalmente FF y Pmax."
+        )
+    elif S["defecto_activo"]:
+        st.info(
+            "Lectura física: la contaminación es un defecto de colección. "
+            "Al disminuir τₙ local, disminuye Lₙ y se reduce la corriente "
+            "fotogenerada global."
         )
     elif S["dedo_roto_col"] is not None:
-        st.caption(
-            "El dedo roto es resistivo: no modifica los mapas ni la montaña "
-            "de IQE, pero aumenta Rs y afecta principalmente FF y Pmax."
+        st.info(
+            "Lectura física: el dedo roto es un defecto resistivo. No cambia "
+            "IQE ni JL; su efecto aparece principalmente en Rs, FF y Pmax."
         )
     else:
         st.caption(
             "Sin defectos activos, la celda sana y la celda afectada coinciden."
         )
+
 
 # ------------------------------------------------------------------
 # TAB 5 — VALIDACIÓN
